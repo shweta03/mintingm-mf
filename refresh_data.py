@@ -301,10 +301,39 @@ def parse_navs(raw):
     recs = []
     for row in raw["data"]:
         try:
-            d, m, y = row["date"].split("-")
-            recs.append((datetime(int(y), mo[m], int(d)), float(row["nav"])))
+            date_str = row["date"]
+            nav_val  = float(row["nav"])
+            dt = None
+
+            # Format 1: "15-Jan-2024" (DD-Mon-YYYY)
+            if not dt:
+                try:
+                    parts = date_str.split("-")
+                    if len(parts) == 3 and parts[1] in mo:
+                        dt = datetime(int(parts[2]), mo[parts[1]], int(parts[0]))
+                except: pass
+
+            # Format 2: "2024-01-15" (YYYY-MM-DD)
+            if not dt:
+                try:
+                    parts = date_str.split("-")
+                    if len(parts) == 3 and len(parts[0]) == 4:
+                        dt = datetime(int(parts[0]), int(parts[1]), int(parts[2]))
+                except: pass
+
+            # Format 3: "15/01/2024" (DD/MM/YYYY)
+            if not dt:
+                try:
+                    parts = date_str.split("/")
+                    if len(parts) == 3:
+                        dt = datetime(int(parts[2]), int(parts[1]), int(parts[0]))
+                except: pass
+
+            if dt and nav_val > 0:
+                recs.append((dt, nav_val))
         except:
             pass
+
     recs.sort(key=lambda x: x[0])
     return recs
 
@@ -548,11 +577,12 @@ def main():
         test = requests.get("https://api.mfapi.in/mf/122639", timeout=15,
                             headers={"User-Agent": "Mozilla/5.0"})
         if test.status_code == 200 and test.json().get("data"):
-            print("✅ mfapi.in reachable — proceeding with live data fetch")
+            sample = test.json()["data"][0]
+            print(f"✅ mfapi.in reachable — sample record: {sample}")
         else:
-            print(f"⚠ mfapi.in returned {test.status_code} — will retry per fund")
+            print(f"⚠ mfapi.in returned {test.status_code}")
     except Exception as e:
-        print(f"⚠ mfapi.in connectivity issue: {e} — will retry per fund")
+        print(f"⚠ mfapi.in connectivity issue: {e}")
 
     nav_cache = {}
 
