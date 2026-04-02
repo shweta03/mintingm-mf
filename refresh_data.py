@@ -552,9 +552,12 @@ def main():
         raw = fetch_nav(code)
         if raw:
             navs = parse_navs(raw)
-            nav_cache[code] = navs
-            print(f"  ✅ {code} — {len(navs)} NAV records "
-                  f"({navs[0][0].year}–{navs[-1][0].year})")
+            if navs:
+                nav_cache[code] = navs
+                print(f"  ✅ {code} — {len(navs)} NAV records "
+                      f"({navs[0][0].year}–{navs[-1][0].year})")
+            else:
+                print(f"  ⚠  {code} — parsed but empty")
         else:
             print(f"  ❌ {code} — fetch failed")
         time.sleep(0.4)
