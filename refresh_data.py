@@ -266,7 +266,7 @@ SCREENER_FUNDS = [
     {"id":3002,"code":118547,"name":"HDFC Gold Fund",                     "cat":"Gold FoF",           "type":"Gold"},
     {"id":3003,"code":120684,"name":"Nippon India ETF Gold BeES",         "cat":"Gold ETF",           "type":"Gold"},
     {"id":3004,"code":119063,"name":"SBI Gold Fund",                      "cat":"Gold FoF",           "type":"Gold"},
-    {"id":3005,"code":119750,"name":"Kotak Gold Fund",                    "cat":"Gold FoF",           "type":"Gold"},
+    {"id":3005,"code":120082,"name":"Kotak Gold Fund",                    "cat":"Gold FoF",           "type":"Gold"},
     {"id":3006,"code":119527,"name":"Axis Gold Fund",                     "cat":"Gold FoF",           "type":"Gold"},
     {"id":3007,"code":118548,"name":"HDFC Gold ETF",                      "cat":"Gold ETF",           "type":"Gold"},
 ]
