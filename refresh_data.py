@@ -501,12 +501,24 @@ def run_real_backtest(profile_key, nav_cache):
 
 def compute_mintingm(funds):
     """
-    Category-relative MintingM scoring.
-    Equity, Debt and Gold each scored within their own universe (0-10 within type).
-    Prevents debt funds being penalised for lower absolute returns vs equity.
-    A debt fund scoring 8.5/10 means it is excellent FOR A DEBT FUND.
+    Category-relative MintingM scoring with category-specific formulas.
+
+    EQUITY:  Returns matter most (50%), then Sharpe (30%), then StdDev penalty (20%)
+    DEBT:    Sharpe matters most (40%) — consistency over returns, then returns (40%), StdDev minor (20%)
+             Compared only vs other debt funds
+    GOLD:    Returns only (70%) + Sharpe (30%) — volatility is inherent to gold, not penalised
+             Compared only vs other gold funds
+
+    Each category normalised 0-10 within itself only.
+    Non-live funds (no real NAV data) get score 0.
     """
-    # Hard filter flags first
+    FORMULA = {
+        "Equity": {"ret": 0.50, "sh": 0.30, "std": 0.20},
+        "Debt":   {"ret": 0.40, "sh": 0.40, "std": 0.20},
+        "Gold":   {"ret": 0.70, "sh": 0.30, "std": 0.00},
+    }
+
+    # Hard filter flags
     for f in funds:
         sh = f.get("sharpe") or 0
         f["sf"] = sh < 1.0
@@ -514,32 +526,48 @@ def compute_mintingm(funds):
             (f.get("max_dd") or -0.99) < -0.30 or
             (f.get("max_dd") or -0.99) > -0.20
         )
-        f["fp"] = not f["sf"] and not f["df"]
+        f["fp"]    = not f["sf"] and not f["df"]
+        f["score"] = 0  # default for non-live
 
-    # Score within each type group separately
+    # Score within each type group — live funds only
     for type_group in ["Equity", "Debt", "Gold"]:
-        group = [f for f in funds if f["type"] == type_group]
-        if not group:
+        group  = [f for f in funds if f["type"] == type_group and f.get("live")]
+        w      = FORMULA[type_group]
+
+        if len(group) == 0:
             continue
+        if len(group) == 1:
+            group[0]["score"] = 10.0
+            continue
+
         for f in group:
-            r10=(f.get("r10")or 0)/100; r7=(f.get("r7")or 0)/100
-            r5=(f.get("r5")or 0)/100;   r3=(f.get("r3")or 0)/100
-            r1=(f.get("r1")or 0)/100;   sh=f.get("sharpe")or 0
-            std=f.get("std_dev")or 0.20
-            if f.get("r10"):   rw=0.25*r10+0.25*r7+0.25*r5+0.15*r3+0.10*r1
-            elif f.get("r7"):  rw=0.35*r7+0.30*r5+0.20*r3+0.15*r1
-            else:              rw=0.40*r5+0.40*r3+0.20*r1
-            f["_raw"]=0.50*rw+0.25*(sh*0.08)-0.25*std
-        # Normalise within this type group only
-        raws=[f["_raw"] for f in group]
-        mn,mx=min(raws),max(raws); rng=mx-mn or 1
+            r10 = (f.get("r10") or 0) / 100
+            r7  = (f.get("r7")  or 0) / 100
+            r5  = (f.get("r5")  or 0) / 100
+            r3  = (f.get("r3")  or 0) / 100
+            r1  = (f.get("r1")  or 0) / 100
+            sh  = f.get("sharpe")  or 0
+            std = f.get("std_dev") or 0.20
+
+            # Return weight — more history = more reliable
+            if f.get("r10"):   rw = 0.25*r10 + 0.25*r7 + 0.25*r5 + 0.15*r3 + 0.10*r1
+            elif f.get("r7"):  rw = 0.35*r7  + 0.30*r5 + 0.20*r3 + 0.15*r1
+            else:              rw = 0.40*r5  + 0.40*r3 + 0.20*r1
+
+            # Category-specific raw score
+            f["_raw"] = w["ret"]*rw + w["sh"]*(sh*0.08) - w["std"]*std
+
+        # Normalise 0-10 within live funds of this category only
+        raws = [f["_raw"] for f in group]
+        mn, mx = min(raws), max(raws)
+        rng = mx - mn or 1
         for f in group:
-            f["score"]=round((f["_raw"]-mn)/rng*10,2)
+            f["score"] = round((f["_raw"] - mn) / rng * 10, 2)
             del f["_raw"]
 
-    # Sort: equity first (by score), then debt, then gold
-    order = {"Equity":0,"Debt":1,"Gold":2}
-    funds.sort(key=lambda f: (order.get(f["type"],3), -f.get("score",0)))
+    # Sort: equity first, then debt, then gold — each by score descending
+    order = {"Equity": 0, "Debt": 1, "Gold": 2}
+    funds.sort(key=lambda f: (order.get(f["type"], 3), -f.get("score", 0)))
     return funds
 
 # ══════════════════════════════════════════════════════════════════════
