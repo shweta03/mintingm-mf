@@ -1,0 +1,12 @@
+{
+  "generated_at": "placeholder",
+  "generated_date": "Not yet generated \u2014 GitHub Actions will update this daily",
+  "live_funds": 0,
+  "total_funds": 0,
+  "sg_ratio": 9.4,
+  "gold_active": true,
+  "gold_threshold": 9.0,
+  "screener": [],
+  "portfolio_funds": {},
+  "backtest": {}
+}
