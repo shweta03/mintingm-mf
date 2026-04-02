@@ -272,7 +272,7 @@ SCREENER_FUNDS = [
 # CORE FUNCTIONS
 # ══════════════════════════════════════════════════════════════════════
 
-def fetch_nav(code, retries=5):
+def fetch_nav(code, retries=2):
     """Fetch full NAV history from mfapi.in — AMFI official data"""
     urls = [
         f"https://api.mfapi.in/mf/{code}",
@@ -281,7 +281,7 @@ def fetch_nav(code, retries=5):
     for attempt in range(retries):
         for url in urls:
             try:
-                r = requests.get(url, timeout=30,
+                r = requests.get(url, timeout=15,
                                  headers={"User-Agent": "Mozilla/5.0"})
                 if r.status_code == 200:
                     d = r.json()
@@ -289,9 +289,7 @@ def fetch_nav(code, retries=5):
                         return d
             except Exception as e:
                 pass
-        wait = 2 * (attempt + 1)
-        print(f"    Retry {attempt+1}/{retries} for {code} — waiting {wait}s...")
-        time.sleep(wait)
+        time.sleep(2)
     return None
 
 def parse_navs(raw):
@@ -607,7 +605,7 @@ def main():
                 print(f"  ⚠  {code} — parsed but empty")
         else:
             print(f"  ❌ {code} — fetch failed")
-        time.sleep(0.4)
+        time.sleep(0.2)
 
     print(f"\n[2/4] Computing fund metrics...")
     fund_metrics = {}
