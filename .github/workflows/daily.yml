@@ -1,0 +1,32 @@
+name: Daily AMFI Data Refresh
+
+on:
+  schedule:
+    - cron: '0 4 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install libraries
+        run: pip install requests
+
+      - name: Fetch real AMFI data
+        run: python refresh_data.py
+
+      - name: Commit data.json to repo
+        run: |
+          git config user.email "action@github.com"
+          git config user.name "GitHub Action"
+          git add data.json
+          git diff --staged --quiet || git commit -m "Daily AMFI data refresh - $(date +%Y-%m-%d)"
+          git push
