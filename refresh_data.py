@@ -272,17 +272,26 @@ SCREENER_FUNDS = [
 # CORE FUNCTIONS
 # ══════════════════════════════════════════════════════════════════════
 
-def fetch_nav(code, retries=3):
+def fetch_nav(code, retries=5):
     """Fetch full NAV history from mfapi.in — AMFI official data"""
+    urls = [
+        f"https://api.mfapi.in/mf/{code}",
+        f"https://mfapi.in/mf/{code}",
+    ]
     for attempt in range(retries):
-        try:
-            r = requests.get(f"{MFAPI_BASE}/{code}", timeout=20)
-            if r.status_code == 200:
-                d = r.json()
-                if d.get("data") and len(d["data"]) > 60:
-                    return d
-        except:
-            time.sleep(2)
+        for url in urls:
+            try:
+                r = requests.get(url, timeout=30,
+                                 headers={"User-Agent": "Mozilla/5.0"})
+                if r.status_code == 200:
+                    d = r.json()
+                    if d.get("data") and len(d["data"]) > 60:
+                        return d
+            except Exception as e:
+                pass
+        wait = 2 * (attempt + 1)
+        print(f"    Retry {attempt+1}/{retries} for {code} — waiting {wait}s...")
+        time.sleep(wait)
     return None
 
 def parse_navs(raw):
@@ -522,10 +531,6 @@ def compute_mintingm(funds):
     return funds
 
 # ══════════════════════════════════════════════════════════════════════
-# NETLIFY
-# ══════════════════════════════════════════════════════════════════════
-
-# ══════════════════════════════════════════════════════════════════════
 # MAIN
 # ══════════════════════════════════════════════════════════════════════
 
@@ -536,6 +541,18 @@ def main():
     print(f"Source:  AMFI India via mfapi.in")
     print(f"Backtest: {BACKTEST_START}–{BACKTEST_END} (real NAV + category proxy pre-launch)")
     print("=" * 55)
+
+    # ── Test connectivity first ───────────────────────────────────
+    print("\nTesting mfapi.in connectivity...")
+    try:
+        test = requests.get("https://api.mfapi.in/mf/122639", timeout=15,
+                            headers={"User-Agent": "Mozilla/5.0"})
+        if test.status_code == 200 and test.json().get("data"):
+            print("✅ mfapi.in reachable — proceeding with live data fetch")
+        else:
+            print(f"⚠ mfapi.in returned {test.status_code} — will retry per fund")
+    except Exception as e:
+        print(f"⚠ mfapi.in connectivity issue: {e} — will retry per fund")
 
     nav_cache = {}
 
