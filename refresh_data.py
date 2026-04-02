@@ -293,45 +293,27 @@ def fetch_nav(code, retries=2):
     return None
 
 def parse_navs(raw):
-    """mfapi response → list of (datetime, float) sorted oldest→newest"""
-    mo = {"Jan":1,"Feb":2,"Mar":3,"Apr":4,"May":5,"Jun":6,
-          "Jul":7,"Aug":8,"Sep":9,"Oct":10,"Nov":11,"Dec":12}
+    """mfapi response → list of (datetime, float) sorted oldest→newest
+    mfapi.in date format: DD-MM-YYYY (e.g. 01-04-2026)
+    """
     recs = []
     for row in raw["data"]:
         try:
-            date_str = row["date"]
             nav_val  = float(row["nav"])
-            dt = None
-
-            # Format 1: "15-Jan-2024" (DD-Mon-YYYY)
-            if not dt:
-                try:
-                    parts = date_str.split("-")
-                    if len(parts) == 3 and parts[1] in mo:
-                        dt = datetime(int(parts[2]), mo[parts[1]], int(parts[0]))
-                except: pass
-
-            # Format 2: "2024-01-15" (YYYY-MM-DD)
-            if not dt:
-                try:
-                    parts = date_str.split("-")
-                    if len(parts) == 3 and len(parts[0]) == 4:
-                        dt = datetime(int(parts[0]), int(parts[1]), int(parts[2]))
-                except: pass
-
-            # Format 3: "15/01/2024" (DD/MM/YYYY)
-            if not dt:
-                try:
-                    parts = date_str.split("/")
-                    if len(parts) == 3:
-                        dt = datetime(int(parts[2]), int(parts[1]), int(parts[0]))
-                except: pass
-
-            if dt and nav_val > 0:
+            date_str = row["date"]
+            parts    = date_str.split("-")
+            # DD-MM-YYYY
+            if len(parts) == 3 and len(parts[2]) == 4:
+                dt = datetime(int(parts[2]), int(parts[1]), int(parts[0]))
+            # YYYY-MM-DD
+            elif len(parts) == 3 and len(parts[0]) == 4:
+                dt = datetime(int(parts[0]), int(parts[1]), int(parts[2]))
+            else:
+                continue
+            if nav_val > 0:
                 recs.append((dt, nav_val))
         except:
             pass
-
     recs.sort(key=lambda x: x[0])
     return recs
 
