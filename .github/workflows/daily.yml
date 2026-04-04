@@ -8,7 +8,7 @@ on:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     permissions:
       contents: write
     steps:
@@ -19,16 +19,16 @@ jobs:
           python-version: '3.12'
 
       - name: Install libraries
-        run: pip install requests
+        run: pip install requests yfinance pandas numpy
 
-      - name: Fetch real AMFI data
-        timeout-minutes: 12
+      - name: Fetch AMFI data + Market Breadth
+        timeout-minutes: 18
         run: python refresh_data.py
 
-      - name: Commit data.json to repo
+      - name: Commit data files to repo
         run: |
           git config user.email "action@github.com"
           git config user.name "GitHub Action"
-          git add data.json
-          git diff --staged --quiet || git commit -m "Daily AMFI data refresh - $(date +%Y-%m-%d)"
+          git add data.json breadth_data.json vix_data.json || true
+          git diff --staged --quiet || git commit -m "Daily data refresh - $(date +%Y-%m-%d)"
           git push
