@@ -711,3 +711,187 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+    # ══════════════════════════════════════════════════════════════
+    # MARKET BREADTH — runs after main script completes
+    # Uses yfinance for stock data (different from AMFI NAV data)
+    # Completely isolated — if this fails, data.json is already saved
+    # ══════════════════════════════════════════════════════════════
+    print(f"\n{'='*55}")
+    print("MARKET BREADTH — Nifty 750 SMA200 + Nifty/VIX Ratio")
+    print("="*55)
+
+    try:
+        import subprocess as _sp
+        _sp.check_call([sys.executable, '-m', 'pip', 'install',
+                        'yfinance', 'pandas', 'numpy', '--quiet'])
+        import yfinance as yf
+        import pandas as pd
+        import numpy as np
+
+        TODAY_STR  = datetime.now().strftime('%Y-%m-%d')
+        LOOK_BACK  = 365  # days to show in chart
+        START_HIST = (datetime.now() - timedelta(days=LOOK_BACK + 250)).strftime('%Y-%m-%d')
+        END_DATE   = datetime.now().strftime('%Y-%m-%d')
+
+        # ── Nifty 750 tickers (verified working on Yahoo Finance) ──
+        N750 = [
+            "RELIANCE.NS","TCS.NS","HDFCBANK.NS","ICICIBANK.NS","INFY.NS",
+            "HINDUNILVR.NS","SBIN.NS","BHARTIARTL.NS","ITC.NS","KOTAKBANK.NS",
+            "LT.NS","AXISBANK.NS","ASIANPAINT.NS","MARUTI.NS","SUNPHARMA.NS",
+            "TITAN.NS","ULTRACEMCO.NS","WIPRO.NS","NESTLEIND.NS","HCLTECH.NS",
+            "POWERGRID.NS","NTPC.NS","TECHM.NS","BAJFINANCE.NS","BAJAJFINSV.NS",
+            "ONGC.NS","COALINDIA.NS","ADANIENT.NS","ADANIPORTS.NS","JSWSTEEL.NS",
+            "TATASTEEL.NS","HINDALCO.NS","GRASIM.NS","CIPLA.NS","DRREDDY.NS",
+            "DIVISLAB.NS","EICHERMOT.NS","BRITANNIA.NS","APOLLOHOSP.NS","BPCL.NS",
+            "HEROMOTOCO.NS","SHRIRAMFIN.NS","TATACONSUM.NS","INDUSINDBK.NS",
+            "SBILIFE.NS","BAJAJ-AUTO.NS","HDFCLIFE.NS","ICICIPRULI.NS","VEDL.NS",
+            "PIDILITIND.NS","DABUR.NS","MARICO.NS","COLPAL.NS","GODREJCP.NS",
+            "BERGEPAINT.NS","HAVELLS.NS","VOLTAS.NS","MUTHOOTFIN.NS","CHOLAFIN.NS",
+            "LICHSGFIN.NS","SBICARD.NS","MANAPPURAM.NS","BANKBARODA.NS","PNB.NS",
+            "CANBK.NS","UNIONBANK.NS","IDFCFIRSTB.NS","AUBANK.NS","RBLBANK.NS",
+            "FEDERALBNK.NS","TATAPOWER.NS","ADANIGREEN.NS","TORNTPOWER.NS",
+            "CESC.NS","NHPC.NS","SJVN.NS","RECLTD.NS","PFC.NS","IRFC.NS",
+            "DLF.NS","GODREJPROP.NS","PRESTIGE.NS","OBEROIRLTY.NS","PHOENIXLTD.NS",
+            "ZOMATO.NS","DELHIVERY.NS","IRCTC.NS","RVNL.NS","CONCOR.NS",
+            "JUBLFOOD.NS","DEVYANI.NS","WESTLIFE.NS","PAGEIND.NS","APLAPOLLO.NS",
+            "PVRINOX.NS","LALPATHLAB.NS","METROPOLIS.NS","IPCALAB.NS",
+            "NATCOPHARM.NS","GLENMARK.NS","TORNTPHARM.NS","ALKEM.NS",
+            "AUROPHARMA.NS","LUPIN.NS","BIOCON.NS","MRF.NS","BALKRISIND.NS",
+            "APOLLOTYRE.NS","ESCORTS.NS","SONACOMS.NS","MOTHERSON.NS",
+            "PIIND.NS","UPL.NS","COROMANDEL.NS","AAVAS.NS","HOMEFIRST.NS",
+            "ASTRAL.NS","SUPREMEIND.NS","TRENT.NS","DMART.NS","AMBER.NS",
+            "DIXON.NS","TATAELXSI.NS","MPHASIS.NS","COFORGE.NS","PERSISTENT.NS",
+            "LTTS.NS","CYIENT.NS","KPITTECH.NS","CAMS.NS","CDSL.NS",
+            "BSE.NS","MCX.NS","ICICIGI.NS","STARHEALTH.NS","INDIGRID.NS",
+            "TATATECH.NS","KAYNES.NS","THERMAX.NS","CUMMINSIND.NS",
+            "BHEL.NS","BEL.NS","HAL.NS","ABFRL.NS","POLYCAB.NS","KEI.NS",
+            "BAJAJHLDNG.NS","DEEPAKNTR.NS","RAILTEL.NS","NUVAMA.NS",
+            "360ONE.NS","ANGELONE.NS","MFSL.NS","PNBHOUSING.NS","APTUS.NS",
+            "ZENSARTECH.NS","FIRSTSOURCE.NS","AFFLE.NS","HAPPSTMNDS.NS",
+            "LATENTVIEW.NS","NETWEB.NS","BIKAJI.NS","SENCO.NS","DOMS.NS",
+            "WAAREEENER.NS","SANSERA.NS","CRAFTSMAN.NS","NUVOCO.NS",
+            "JKCEMENT.NS","RAMCOCEM.NS","HEIDELBERG.NS","DALMIA.NS",
+            "SHREECEM.NS","ACC.NS","AMBUJACEMENT.NS","JSPL.NS","SAIL.NS",
+            "NMDC.NS","MOIL.NS","NATIONALUM.NS","WELCORP.NS","GRINDWELL.NS",
+            "TIMKEN.NS","SKF.NS","SCHAEFFLER.NS","FINEORG.NS","SUDARSCHEM.NS",
+            "NAVINFLUOR.NS","FLUOROCHEM.NS","CLEAN.NS","GHCL.NS","NOCIL.NS",
+            "ZYDUSLIFE.NS","LAURUSLABS.NS","GRANULES.NS","CROMPTON.NS",
+        ]
+        N750 = list(dict.fromkeys(N750))  # deduplicate
+
+        # ── 1. Nifty 750 Breadth — stocks above 200 SMA ──────────
+        print(f"\n[Breadth] Fetching {len(N750)} stocks via yfinance...")
+        nav_store = {}
+        batch_size = 50
+        for i in range(0, len(N750), batch_size):
+            batch = N750[i:i+batch_size]
+            try:
+                df = yf.download(batch, start=START_HIST, end=END_DATE,
+                                 auto_adjust=True, progress=False, threads=True)
+                if isinstance(df.columns, pd.MultiIndex):
+                    closes = df['Close']
+                else:
+                    closes = df
+                for t in batch:
+                    if t in closes.columns:
+                        s = closes[t].dropna()
+                        if len(s) > 50:
+                            nav_store[t] = s
+            except Exception as e:
+                print(f"  Batch {i//batch_size+1} error: {e}")
+            time.sleep(0.5)
+
+        print(f"  Got data for {len(nav_store)} stocks")
+
+        # Compute breadth for each trading day in last LOOK_BACK days
+        if nav_store:
+            sample      = next(iter(nav_store.values()))
+            cutoff      = datetime.now() - timedelta(days=LOOK_BACK)
+            trade_days  = [d for d in sample.index
+                           if d.to_pydatetime().replace(tzinfo=None) >= cutoff]
+
+            dates, above_list = [], []
+            for day in trade_days:
+                above = 0; total = 0
+                for s in nav_store.values():
+                    try:
+                        hist = s[s.index <= day]
+                        if len(hist) < 200: continue
+                        if float(hist.iloc[-1]) > float(hist.iloc[-200:].mean()):
+                            above += 1
+                        total += 1
+                    except: pass
+                if total > 50:
+                    dates.append(day.strftime('%Y-%m-%d'))
+                    above_list.append(above)
+
+            breadth_data = {
+                "dates": dates, "above": above_list,
+                "total": len(nav_store), "generated": TODAY_STR
+            }
+            Path('breadth_data.json').write_text(json.dumps(breadth_data, indent=2))
+            latest = above_list[-1] if above_list else 0
+            print(f"  ✅ breadth_data.json — {len(dates)} days, latest: {latest}/{len(nav_store)}")
+        else:
+            print("  ⚠ No stock data — breadth_data.json not created")
+
+        # ── 2. Nifty/VIX Ratio — 256-day rolling percentile ──────
+        print(f"\n[VIX] Fetching Nifty 50 + India VIX...")
+        start_vix = (datetime.now() - timedelta(days=365*3+60)).strftime('%Y-%m-%d')
+
+        nifty_raw = yf.download('^NSEI',     start=start_vix, end=END_DATE,
+                                auto_adjust=True, progress=False)
+        vix_raw   = yf.download('^INDIAVIX', start=start_vix, end=END_DATE,
+                                auto_adjust=True, progress=False)
+
+        def get_close(df):
+            if isinstance(df.columns, pd.MultiIndex):
+                return df['Close'].iloc[:,0].dropna()
+            return df['Close'].dropna() if 'Close' in df.columns else df.iloc[:,0].dropna()
+
+        nifty_s = get_close(nifty_raw)
+        vix_s   = get_close(vix_raw)
+
+        combined = pd.DataFrame({'nifty': nifty_s, 'vix': vix_s}).dropna()
+        combined['ratio'] = combined['nifty'] / combined['vix']
+
+        # 256-day rolling percentile rank
+        ratio_arr = combined['ratio'].values
+        pct_ranks = []
+        for i in range(len(ratio_arr)):
+            if i < 256:
+                pct_ranks.append(None)
+                continue
+            window  = ratio_arr[i-256:i]
+            current = ratio_arr[i]
+            pct_ranks.append(round(float((window < current).sum() / 256 * 100), 1))
+
+        combined['pct_rank'] = pct_ranks
+        combined = combined.dropna(subset=['pct_rank'])
+
+        # Last LOOK_BACK days only for chart
+        cutoff2  = datetime.now() - timedelta(days=LOOK_BACK)
+        tz       = combined.index.tz
+        if tz:
+            import pytz
+            combined = combined[combined.index >= pd.Timestamp(cutoff2, tz=pytz.utc)]
+        else:
+            combined = combined[combined.index >= cutoff2]
+
+        vix_data = {
+            "dates":      [d.strftime('%Y-%m-%d') for d in combined.index],
+            "percentile": [float(v) for v in combined['pct_rank']],
+            "nifty":      [float(v) for v in combined['nifty']],
+            "ratio":      [round(float(v), 2) for v in combined['ratio']],
+            "generated":  TODAY_STR
+        }
+        Path('vix_data.json').write_text(json.dumps(vix_data, indent=2))
+        latest_pct = vix_data['percentile'][-1] if vix_data['percentile'] else 50
+        print(f"  ✅ vix_data.json — {len(vix_data['dates'])} days, latest: {latest_pct:.0f}th percentile")
+        print(f"\n✅ Market Breadth complete")
+
+    except Exception as e:
+        print(f"\n⚠ Market Breadth failed: {e}")
+        print(f"  Main data.json is unaffected — AMFI data saved successfully")
+
