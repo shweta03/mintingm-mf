@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-04-17T14:35:39.410110",
+  "generated_at": "2026-04-17T14:43:34.889533",
   "generated_date": "17 Apr 2026",
-  "generated_time": "14:35 IST",
+  "generated_time": "14:43 IST",
   "data_source": "AMFI India via mfapi.in \u2014 official NAV data",
   "backtest_note": "Real backtest 2000\u20132026. Actual fund NAV used post-launch. Same-category proxy fund used pre-launch.",
   "rf_rate": 0.065,
