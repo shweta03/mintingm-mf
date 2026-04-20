@@ -2,13 +2,13 @@ name: Daily AMFI Data Refresh
 
 on:
   schedule:
-    - cron: '0 4 * * 1-5'
+    - cron: '30 19 * * 1-5'   # 19:30 UTC = 1:00 AM IST — after AMFI publishes at 11 PM IST
   workflow_dispatch:
 
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     permissions:
       contents: write
     steps:
@@ -22,10 +22,10 @@ jobs:
         run: pip install requests yfinance pandas numpy
 
       - name: Fetch AMFI data + Market Breadth
-        timeout-minutes: 18
+        timeout-minutes: 22
         run: python refresh_data.py
 
-      - name: Commit data files to repo
+      - name: Commit data files
         run: |
           git config user.email "action@github.com"
           git config user.name "GitHub Action"
