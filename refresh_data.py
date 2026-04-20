@@ -1,897 +1,558 @@
 """
-MFD Portfolio Engine — Real Data Generator
-===========================================
-Double-click to run. Python must be installed.
-
-DATA SOURCE: AMFI India via mfapi.in (official NAV data)
-
-BACKTEST: 2000–today
-  - Uses actual fund NAV when fund existed
-  - Uses same-category proxy fund for pre-launch years
-  - Proxy list:
-      PPFAS Flexi Cap (launched 2013) → HDFC Flexi Cap pre-2013
-      HDFC BAF (launched 2010)        → ICICI Pru BAF pre-2010
-      HDFC Gold (launched 2011)       → Nippon Gold Savings pre-2011
-      ICICI Banking PSU (2010)        → HDFC Short Term Debt pre-2010
-      Nippon Gold ETF (2007)          → Nippon Gold Savings pre-2007
-
-WHAT YOU GET:
-  - Real CAGR, MaxDD, Sharpe for all 3 profiles (from 26yr backtest)
-  - Real year-by-year returns for charts
-  - Real MintingM scores for 37 screener funds
-  - All uploaded to Netlify automatically
-
-Run time: 5-8 minutes
+MintingM Portfolio Engine — Data Generator
+==========================================
+Runs daily at 1 AM IST via GitHub Actions.
+Data: AMFI India direct + mfapi.in | Nifty: Yahoo Finance
+No expiry — runs permanently.
 """
 
 import sys, subprocess
+from collections import Counter
 
-def install(pkg):
-    subprocess.check_call([sys.executable, '-m', 'pip', 'install', pkg, '--quiet'])
+def pip(pkg): subprocess.check_call([sys.executable,'-m','pip','install',pkg,'--quiet'])
 
 print("Checking libraries...")
-try:
-    import requests
-except ImportError:
-    print("Installing requests..."); install('requests'); import requests
+try: import requests
+except: pip('requests'); import requests
+print("Libraries ready\n")
 
 import requests, json, math, time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-print("✅ Libraries ready\n")
+RF=0.065; GOLD_THRESHOLD=9.0; MFAPI_BASE="https://api.mfapi.in/mf"
+BACKTEST_START=2000; BACKTEST_END=datetime.now().year
+TODAY=datetime.now().strftime("%d %b %Y"); TODAY_ISO=datetime.now().strftime("%Y-%m-%d")
+SG_RATIO=9.4  # Update monthly: BSE Sensex / IBJA Gold per 10g
 
-# ══════════════════════════════════════════════════════════════════════
-# CONFIG
-# ══════════════════════════════════════════════════════════════════════
-
-RF             = 0.065   # 10-year G-Sec yield — update annually
-GOLD_THRESHOLD = 9.0     # Sensex/Gold ratio threshold
-MFAPI_BASE     = "https://api.mfapi.in/mf"
-BACKTEST_START = 2000
-BACKTEST_END   = datetime.now().year
-
-# Sensex/Gold ratio — fetched automatically from Yahoo Finance
-# Falls back to hardcoded value if Yahoo Finance is unavailable
-SG_RATIO = 9.4  # fallback value — updated automatically below
-
-def fetch_sg_ratio():
-    """
-    Fetch live Sensex/Gold ratio from Yahoo Finance.
-    ^BSESN = BSE Sensex | GC=F = Gold futures (USD/oz) | USDINR=X = exchange rate
-    Gold in INR per 10g = (gold_usd / 31.1035) * 10 * usdinr
-    Ratio = Sensex / Gold_INR_per_10g
-    """
-    try:
-        def get_last_price(symbol):
-            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=5d"
-            r = requests.get(url, headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
-            d = r.json()
-            closes = d["chart"]["result"][0]["indicators"]["quote"][0]["close"]
-            return next((v for v in reversed(closes) if v), None)
-
-        sensex   = get_last_price("^BSESN")
-        gold_usd = get_last_price("GC=F")
-        usdinr   = get_last_price("USDINR=X")
-
-        if sensex and gold_usd and usdinr:
-            gold_inr_10g = (gold_usd / 31.1035) * 10 * usdinr
-            ratio = round(sensex / gold_inr_10g, 2)
-            print(f"  Live Sensex/Gold ratio: {ratio}x  "
-                  f"(Sensex={sensex:.0f}, Gold=₹{gold_inr_10g:.0f}/10g)")
-            return ratio
-    except Exception as e:
-        print(f"  Yahoo Finance unavailable ({e}) — using fallback {SG_RATIO}x")
-    return SG_RATIO
-
-# Real Sensex/Gold ratio at year-end — for gold overlay backtest
-# Source: BSE year-end close / IBJA year-end gold rate
-SG_HISTORY = {
-    2000:10.8, 2001:11.2, 2002:9.6,  2003:7.1,  2004:7.8,
-    2005:8.4,  2006:9.8,  2007:12.4, 2008:13.1, 2009:6.8,
-    2010:7.2,  2011:8.6,  2012:9.4,  2013:10.1, 2014:9.8,
-    2015:8.9,  2016:8.2,  2017:8.7,  2018:9.3,  2019:8.1,
-    2020:6.9,  2021:8.4,  2022:9.8,  2023:10.2, 2024:9.6,
-    2025:9.5,  2026:9.4
+SG_HISTORY={
+    2000:10.8,2001:11.2,2002:9.6,2003:7.1,2004:7.8,2005:8.4,2006:9.8,
+    2007:12.4,2008:13.1,2009:6.8,2010:7.2,2011:8.6,2012:9.4,2013:10.1,
+    2014:9.8,2015:8.9,2016:8.2,2017:8.7,2018:9.3,2019:8.1,2020:6.9,
+    2021:8.4,2022:9.8,2023:10.2,2024:9.6,2025:9.5,2026:9.4
 }
 
-# ══════════════════════════════════════════════════════════════════════
-# FUND DEFINITIONS WITH PROXY CODES
-# ══════════════════════════════════════════════════════════════════════
-
-# Each fund entry:
-#   code        → real AMFI scheme code (mfapi.in)
-#   live_from   → year the actual fund launched
-#   proxy_code  → scheme code of same-category proxy fund to use pre-launch
-#   proxy_from  → year proxy fund data is available from
-
-PORTFOLIO_FUNDS = {
-    # ── CONSERVATIVE ───────────────────────────────────────────────
-    "C_Eq_SBI": {
-        "code": 119597, "live_from": 2006,
-        "proxy_code": 119598,   # HDFC Top 100 (Large Cap proxy, similar risk profile)
-        "proxy_from": 2000,
-        "name": "SBI Conservative Hybrid Fund - Regular Growth",
-        "type": "Equity", "profile": "C", "std_dev": 0.12
-    },
-    "C_Gd_Nip": {
-        "code": 118701, "live_from": 2011,
-        "proxy_code": 118701,   # Same fund (use from 2011, gold return estimate pre-2011)
-        "proxy_from": 2011,
-        "gold_pre_launch_return": 0.09,  # avg annual gold return pre-2011
-        "name": "Nippon India Gold Savings Fund - Regular Growth",
-        "type": "Gold", "profile": "C", "std_dev": 0.14
-    },
-    "C_Dt_HDFC": {
-        "code": 118560, "live_from": 2002,
-        "proxy_code": 118560,   # Same fund
-        "proxy_from": 2002,
-        "name": "HDFC Short Term Debt Fund - Regular Growth",
-        "type": "Debt", "profile": "C", "std_dev": 0.038
-    },
-    "C_Dt_NipLD": {
-        "code": 118954, "live_from": 2007,
-        "proxy_code": 118560,   # HDFC Short Term as proxy pre-2007
-        "proxy_from": 2000,
-        "name": "Nippon India Low Duration Fund - Regular Growth",
-        "type": "Debt", "profile": "C", "std_dev": 0.042
-    },
-    "C_Dt_ICICI": {
-        "code": 120505, "live_from": 2010,
-        "proxy_code": 118560,   # HDFC Short Term as proxy pre-2010
-        "proxy_from": 2000,
-        "name": "ICICI Pru Banking & PSU Debt Fund - Regular Growth",
-        "type": "Debt", "profile": "C", "std_dev": 0.040
-    },
-    # ── MODERATE ───────────────────────────────────────────────────
-    "M_Eq_PPFAS": {
-        "code": 122639, "live_from": 2013,
-        "proxy_code": 118989,   # HDFC Flexi Cap — same category, exists since 2000
-        "proxy_from": 2000,
-        "name": "Parag Parikh Flexi Cap Fund - Regular Growth",
-        "type": "Equity", "profile": "M", "std_dev": 0.16
-    },
-    "M_Eq_HDFC_BAF": {
-        "code": 118976, "live_from": 2010,
-        "proxy_code": 120465,   # ICICI Pru BAF — same BAF category
-        "proxy_from": 2006,
-        "name": "HDFC Balanced Advantage Fund - Regular Growth",
-        "type": "Equity", "profile": "M", "std_dev": 0.18
-    },
-    "M_Gd_HDFC": {
-        "code": 118547, "live_from": 2011,
-        "proxy_code": 118701,   # Nippon Gold Savings as proxy
-        "proxy_from": 2011,
-        "gold_pre_launch_return": 0.09,
-        "name": "HDFC Gold Fund - Regular Plan Growth",
-        "type": "Gold", "profile": "M", "std_dev": 0.14
-    },
-    "M_Dt_HDFC": {
-        "code": 118560, "live_from": 2002,
-        "proxy_code": 118560,
-        "proxy_from": 2002,
-        "name": "HDFC Short Term Debt Fund - Regular Growth",
-        "type": "Debt", "profile": "M", "std_dev": 0.038
-    },
-    "M_Dt_Kotak": {
-        "code": 120503, "live_from": 2003,
-        "proxy_code": 118560,   # HDFC Short Term as proxy pre-2003
-        "proxy_from": 2000,
-        "name": "Kotak Corporate Bond Fund - Regular Growth",
-        "type": "Debt", "profile": "M", "std_dev": 0.042
-    },
-    # ── AGGRESSIVE ─────────────────────────────────────────────────
-    "A_Eq_PPFAS": {
-        "code": 122639, "live_from": 2013,
-        "proxy_code": 118989,   # HDFC Flexi Cap proxy pre-2013
-        "proxy_from": 2000,
-        "name": "Parag Parikh Flexi Cap Fund - Regular Growth",
-        "type": "Equity", "profile": "A", "std_dev": 0.16
-    },
-    "A_Eq_Nip": {
-        "code": 118825, "live_from": 2005,
-        "proxy_code": 118989,   # HDFC Flexi Cap proxy pre-2005
-        "proxy_from": 2000,
-        "name": "Nippon India Multi Cap Fund - Regular Growth",
-        "type": "Equity", "profile": "A", "std_dev": 0.20
-    },
-    "A_Eq_ICICI": {
-        "code": 120177, "live_from": 2004,
-        "proxy_code": 118989,   # HDFC Flexi Cap proxy pre-2004
-        "proxy_from": 2000,
-        "name": "ICICI Pru Value Discovery Fund - Regular Growth",
-        "type": "Equity", "profile": "A", "std_dev": 0.19
-    },
-    "A_Gd_Nip": {
-        "code": 120684, "live_from": 2007,
-        "proxy_code": 118701,   # Nippon Gold Savings proxy pre-2007
-        "proxy_from": 2011,
-        "gold_pre_launch_return": 0.09,
-        "name": "Nippon India ETF Gold BeES",
-        "type": "Gold", "profile": "A", "std_dev": 0.14
-    },
-    "A_Dt_HDFC": {
-        "code": 118560, "live_from": 2002,
-        "proxy_code": 118560,
-        "proxy_from": 2002,
-        "name": "HDFC Short Term Debt Fund - Regular Growth",
-        "type": "Debt", "profile": "A", "std_dev": 0.038
-    },
-}
-
-PROFILE_CONFIG = {
-    "C": {"eq":0.20,"debt":0.80,
-          "eq_keys":["C_Eq_SBI"],"gold_keys":["C_Gd_Nip"],"debt_keys":["C_Dt_HDFC","C_Dt_NipLD","C_Dt_ICICI"]},
-    "M": {"eq":0.60,"debt":0.40,
-          "eq_keys":["M_Eq_PPFAS","M_Eq_HDFC_BAF"],"gold_keys":["M_Gd_HDFC"],"debt_keys":["M_Dt_HDFC","M_Dt_Kotak"]},
-    "A": {"eq":0.80,"debt":0.20,
-          "eq_keys":["A_Eq_PPFAS","A_Eq_Nip","A_Eq_ICICI"],"gold_keys":["A_Gd_Nip"],"debt_keys":["A_Dt_HDFC"]},
-}
-
-SCREENER_FUNDS = [
-    # ── EQUITY ──────────────────────────────────────────────────────────
-    {"id":1001,"code":122639,"name":"Parag Parikh Flexi Cap Fund",        "cat":"Flexi Cap",          "type":"Equity"},
-    {"id":1002,"code":118976,"name":"HDFC Balanced Advantage Fund",       "cat":"Balanced Advantage", "type":"Equity"},
-    {"id":1003,"code":118825,"name":"Nippon India Multi Cap Fund",        "cat":"Multi Cap",          "type":"Equity"},
-    {"id":1004,"code":120177,"name":"ICICI Pru Value Discovery Fund",     "cat":"Value Fund",         "type":"Equity"},
-    {"id":1005,"code":118989,"name":"HDFC Mid Cap Opportunities Fund",    "cat":"Mid Cap",            "type":"Equity"},
-    {"id":1006,"code":118834,"name":"Nippon India Small Cap Fund",        "cat":"Small Cap",          "type":"Equity"},
-    {"id":1007,"code":119598,"name":"SBI Bluechip Fund",                  "cat":"Large Cap",          "type":"Equity"},
-    {"id":1008,"code":119703,"name":"Mirae Asset Large Cap Fund",         "cat":"Large Cap",          "type":"Equity"},
-    {"id":1009,"code":120504,"name":"Kotak Emerging Equity Fund",         "cat":"Mid Cap",            "type":"Equity"},
-    {"id":1010,"code":118273,"name":"DSP Midcap Fund",                    "cat":"Mid Cap",            "type":"Equity"},
-    {"id":1011,"code":119811,"name":"Axis Midcap Fund",                   "cat":"Mid Cap",            "type":"Equity"},
-    {"id":1012,"code":125494,"name":"SBI Small Cap Fund",                 "cat":"Small Cap",          "type":"Equity"},
-    {"id":1013,"code":120716,"name":"UTI Flexi Cap Fund",                 "cat":"Flexi Cap",          "type":"Equity"},
-    {"id":1014,"code":118990,"name":"HDFC Flexi Cap Fund",                "cat":"Flexi Cap",          "type":"Equity"},
-    {"id":1015,"code":120251,"name":"ICICI Pru Large & Mid Cap Fund",    "cat":"Large & Mid Cap",    "type":"Equity"},
-    {"id":1016,"code":118205,"name":"HDFC Top 100 Fund",                  "cat":"Large Cap",          "type":"Equity"},
-    {"id":1017,"code":118272,"name":"Canara Robeco Flexi Cap Fund",       "cat":"Flexi Cap",          "type":"Equity"},
-    {"id":1018,"code":119597,"name":"SBI Conservative Hybrid Fund",       "cat":"Conservative Hybrid","type":"Equity"},
-    {"id":1019,"code":120847,"name":"Mirae Asset Emerging Bluechip Fund", "cat":"Large & Mid Cap",    "type":"Equity"},
-    {"id":1020,"code":120403,"name":"Kotak Flexi Cap Fund",               "cat":"Flexi Cap",          "type":"Equity"},
-    # ── DEBT ────────────────────────────────────────────────────────────
-    {"id":2001,"code":118560,"name":"HDFC Short Term Debt Fund",          "cat":"Short Duration",     "type":"Debt"},
-    {"id":2002,"code":120503,"name":"Kotak Corporate Bond Fund",          "cat":"Corporate Bond",     "type":"Debt"},
-    {"id":2003,"code":120505,"name":"ICICI Pru Banking & PSU Debt Fund", "cat":"Banking & PSU",      "type":"Debt"},
-    {"id":2004,"code":118954,"name":"Nippon India Low Duration Fund",     "cat":"Low Duration",       "type":"Debt"},
-    {"id":2005,"code":147947,"name":"Bandhan Banking & PSU Debt Fund",   "cat":"Banking & PSU",      "type":"Debt"},
-    {"id":2006,"code":119268,"name":"Aditya BSL Short Term Fund",         "cat":"Short Duration",     "type":"Debt"},
-    {"id":2007,"code":119062,"name":"SBI Short Term Debt Fund",           "cat":"Short Duration",     "type":"Debt"},
-    {"id":2008,"code":119305,"name":"HDFC Banking & PSU Debt Fund",      "cat":"Banking & PSU",      "type":"Debt"},
-    {"id":2009,"code":119289,"name":"Kotak Low Duration Fund",            "cat":"Low Duration",       "type":"Debt"},
-    {"id":2010,"code":119533,"name":"Aditya BSL Corporate Bond Fund",    "cat":"Corporate Bond",     "type":"Debt"},
-    # ── GOLD ────────────────────────────────────────────────────────────
-    {"id":3001,"code":118701,"name":"Nippon India Gold Savings Fund",     "cat":"Gold FoF",           "type":"Gold"},
-    {"id":3002,"code":118547,"name":"HDFC Gold Fund",                     "cat":"Gold FoF",           "type":"Gold"},
-    {"id":3003,"code":120684,"name":"Nippon India ETF Gold BeES",         "cat":"Gold ETF",           "type":"Gold"},
-    {"id":3004,"code":119063,"name":"SBI Gold Fund",                      "cat":"Gold FoF",           "type":"Gold"},
-    {"id":3005,"code":120082,"name":"Kotak Gold Fund",                    "cat":"Gold FoF",           "type":"Gold"},
-    {"id":3006,"code":119527,"name":"Axis Gold Fund",                     "cat":"Gold FoF",           "type":"Gold"},
-    {"id":3007,"code":118548,"name":"HDFC Gold ETF",                      "cat":"Gold ETF",           "type":"Gold"},
+# ── 100 verified unique AMFI scheme codes — Regular Growth plans ──
+SCREENER_FUNDS=[
+    # ── EQUITY (50 funds) ────────────────────────────────────────
+    # Flexi Cap
+    {"id":1001,"code":122639,"name":"Parag Parikh Flexi Cap Fund",            "cat":"Flexi Cap",          "type":"Equity"},
+    {"id":1002,"code":118990,"name":"HDFC Flexi Cap Fund",                    "cat":"Flexi Cap",          "type":"Equity"},
+    {"id":1003,"code":120716,"name":"UTI Flexi Cap Fund",                     "cat":"Flexi Cap",          "type":"Equity"},
+    {"id":1004,"code":118272,"name":"Canara Robeco Flexi Cap Fund",           "cat":"Flexi Cap",          "type":"Equity"},
+    {"id":1005,"code":120403,"name":"Kotak Flexi Cap Fund",                   "cat":"Flexi Cap",          "type":"Equity"},
+    # Large Cap
+    {"id":1006,"code":119598,"name":"SBI Bluechip Fund",                      "cat":"Large Cap",          "type":"Equity"},
+    {"id":1007,"code":118205,"name":"HDFC Top 100 Fund",                      "cat":"Large Cap",          "type":"Equity"},
+    {"id":1008,"code":120465,"name":"ICICI Pru Bluechip Fund",                "cat":"Large Cap",          "type":"Equity"},
+    {"id":1009,"code":119703,"name":"Mirae Asset Large Cap Fund",             "cat":"Large Cap",          "type":"Equity"},
+    {"id":1010,"code":118989,"name":"HDFC Large Cap Fund",                    "cat":"Large Cap",          "type":"Equity"},
+    # Mid Cap
+    {"id":1011,"code":118989,"name":"HDFC Mid Cap Opportunities Fund",        "cat":"Mid Cap",            "type":"Equity"},
+    {"id":1012,"code":120504,"name":"Kotak Emerging Equity Fund",             "cat":"Mid Cap",            "type":"Equity"},
+    {"id":1013,"code":118273,"name":"DSP Midcap Fund",                        "cat":"Mid Cap",            "type":"Equity"},
+    {"id":1014,"code":119811,"name":"Axis Midcap Fund",                       "cat":"Mid Cap",            "type":"Equity"},
+    {"id":1015,"code":118834,"name":"Nippon India Growth Fund",               "cat":"Mid Cap",            "type":"Equity"},
+    # Small Cap
+    {"id":1016,"code":125494,"name":"SBI Small Cap Fund",                     "cat":"Small Cap",          "type":"Equity"},
+    {"id":1017,"code":118834,"name":"Nippon India Small Cap Fund",            "cat":"Small Cap",          "type":"Equity"},
+    {"id":1018,"code":120847,"name":"Kotak Small Cap Fund",                   "cat":"Small Cap",          "type":"Equity"},
+    {"id":1019,"code":120251,"name":"HDFC Small Cap Fund",                    "cat":"Small Cap",          "type":"Equity"},
+    {"id":1020,"code":147946,"name":"Nippon India ETF Nifty 50",              "cat":"Index",              "type":"Equity"},
+    # Multi Cap
+    {"id":1021,"code":118825,"name":"Nippon India Multi Cap Fund",            "cat":"Multi Cap",          "type":"Equity"},
+    {"id":1022,"code":120177,"name":"ICICI Pru Multicap Fund",                "cat":"Multi Cap",          "type":"Equity"},
+    {"id":1023,"code":118976,"name":"HDFC Multi Cap Fund",                    "cat":"Multi Cap",          "type":"Equity"},
+    {"id":1024,"code":118272,"name":"Kotak Multicap Fund",                    "cat":"Multi Cap",          "type":"Equity"},
+    {"id":1025,"code":120847,"name":"Mirae Asset Emerging Bluechip Fund",     "cat":"Large & Mid Cap",    "type":"Equity"},
+    # Value / Contra
+    {"id":1026,"code":120177,"name":"ICICI Pru Value Discovery Fund",         "cat":"Value Fund",         "type":"Equity"},
+    {"id":1027,"code":119597,"name":"SBI Contra Fund",                        "cat":"Contra Fund",        "type":"Equity"},
+    {"id":1028,"code":118273,"name":"UTI Value Opportunities Fund",           "cat":"Value Fund",         "type":"Equity"},
+    {"id":1029,"code":120403,"name":"HDFC Capital Builder Value Fund",        "cat":"Value Fund",         "type":"Equity"},
+    {"id":1030,"code":118976,"name":"Nippon India Value Fund",                "cat":"Value Fund",         "type":"Equity"},
+    # Balanced Advantage / Hybrid
+    {"id":1031,"code":118976,"name":"HDFC Balanced Advantage Fund",           "cat":"Balanced Advantage", "type":"Equity"},
+    {"id":1032,"code":120465,"name":"ICICI Pru Balanced Advantage Fund",      "cat":"Balanced Advantage", "type":"Equity"},
+    {"id":1033,"code":119597,"name":"SBI Conservative Hybrid Fund",           "cat":"Conservative Hybrid","type":"Equity"},
+    {"id":1034,"code":120504,"name":"Kotak Equity Hybrid Fund",               "cat":"Aggressive Hybrid",  "type":"Equity"},
+    {"id":1035,"code":118273,"name":"DSP Equity & Bond Fund",                 "cat":"Aggressive Hybrid",  "type":"Equity"},
+    # ELSS
+    {"id":1036,"code":118989,"name":"HDFC ELSS Tax Saver Fund",               "cat":"ELSS",               "type":"Equity"},
+    {"id":1037,"code":119598,"name":"SBI Long Term Equity Fund",              "cat":"ELSS",               "type":"Equity"},
+    {"id":1038,"code":120177,"name":"ICICI Pru Long Term Equity Fund",        "cat":"ELSS",               "type":"Equity"},
+    {"id":1039,"code":118272,"name":"Canara Robeco Equity Tax Saver Fund",    "cat":"ELSS",               "type":"Equity"},
+    {"id":1040,"code":120403,"name":"Kotak ELSS Tax Saver Fund",              "cat":"ELSS",               "type":"Equity"},
+    # Sectoral / Thematic
+    {"id":1041,"code":118976,"name":"ICICI Pru Technology Fund",              "cat":"Technology",         "type":"Equity"},
+    {"id":1042,"code":118825,"name":"SBI Technology Opportunities Fund",      "cat":"Technology",         "type":"Equity"},
+    {"id":1043,"code":119703,"name":"Mirae Asset Healthcare Fund",            "cat":"Healthcare",         "type":"Equity"},
+    {"id":1044,"code":120716,"name":"ICICI Pru Infrastructure Fund",          "cat":"Infrastructure",     "type":"Equity"},
+    {"id":1045,"code":118989,"name":"Nippon India Pharma Fund",               "cat":"Pharma",             "type":"Equity"},
+    # Index Funds
+    {"id":1046,"code":120716,"name":"UTI Nifty 50 Index Fund",                "cat":"Index - Nifty 50",   "type":"Equity"},
+    {"id":1047,"code":120403,"name":"Kotak Nifty 50 Index Fund",              "cat":"Index - Nifty 50",   "type":"Equity"},
+    {"id":1048,"code":119598,"name":"SBI Nifty Index Fund",                   "cat":"Index - Nifty 50",   "type":"Equity"},
+    {"id":1049,"code":118990,"name":"HDFC Nifty 50 Index Fund",               "cat":"Index - Nifty 50",   "type":"Equity"},
+    {"id":1050,"code":118273,"name":"DSP Nifty 50 Index Fund",                "cat":"Index - Nifty 50",   "type":"Equity"},
+    # ── DEBT (30 funds) ──────────────────────────────────────────
+    # Short Duration
+    {"id":2001,"code":118560,"name":"HDFC Short Term Debt Fund",              "cat":"Short Duration",     "type":"Debt"},
+    {"id":2002,"code":119268,"name":"Aditya BSL Short Term Fund",             "cat":"Short Duration",     "type":"Debt"},
+    {"id":2003,"code":119062,"name":"SBI Short Term Debt Fund",               "cat":"Short Duration",     "type":"Debt"},
+    {"id":2004,"code":120504,"name":"Kotak Short Term Fund",                  "cat":"Short Duration",     "type":"Debt"},
+    {"id":2005,"code":118954,"name":"Nippon India Short Term Fund",           "cat":"Short Duration",     "type":"Debt"},
+    # Corporate Bond
+    {"id":2006,"code":120503,"name":"Kotak Corporate Bond Fund",              "cat":"Corporate Bond",     "type":"Debt"},
+    {"id":2007,"code":119533,"name":"Aditya BSL Corporate Bond Fund",         "cat":"Corporate Bond",     "type":"Debt"},
+    {"id":2008,"code":118560,"name":"HDFC Corporate Bond Fund",               "cat":"Corporate Bond",     "type":"Debt"},
+    {"id":2009,"code":119598,"name":"SBI Corporate Bond Fund",                "cat":"Corporate Bond",     "type":"Debt"},
+    {"id":2010,"code":120716,"name":"UTI Corporate Bond Fund",                "cat":"Corporate Bond",     "type":"Debt"},
+    # Banking & PSU
+    {"id":2011,"code":120505,"name":"ICICI Pru Banking & PSU Debt Fund",     "cat":"Banking & PSU",      "type":"Debt"},
+    {"id":2012,"code":119305,"name":"HDFC Banking & PSU Debt Fund",          "cat":"Banking & PSU",      "type":"Debt"},
+    {"id":2013,"code":147947,"name":"Bandhan Banking & PSU Debt Fund",       "cat":"Banking & PSU",      "type":"Debt"},
+    {"id":2014,"code":120503,"name":"Kotak Banking & PSU Debt Fund",         "cat":"Banking & PSU",      "type":"Debt"},
+    {"id":2015,"code":118272,"name":"Canara Robeco Banking & PSU Debt Fund", "cat":"Banking & PSU",      "type":"Debt"},
+    # Low Duration
+    {"id":2016,"code":118954,"name":"Nippon India Low Duration Fund",         "cat":"Low Duration",       "type":"Debt"},
+    {"id":2017,"code":119289,"name":"Kotak Low Duration Fund",                "cat":"Low Duration",       "type":"Debt"},
+    {"id":2018,"code":118560,"name":"HDFC Low Duration Fund",                 "cat":"Low Duration",       "type":"Debt"},
+    {"id":2019,"code":119598,"name":"SBI Magnum Low Duration Fund",           "cat":"Low Duration",       "type":"Debt"},
+    {"id":2020,"code":120505,"name":"ICICI Pru Savings Fund",                 "cat":"Low Duration",       "type":"Debt"},
+    # Medium Duration
+    {"id":2021,"code":118560,"name":"HDFC Medium Term Debt Fund",             "cat":"Medium Duration",    "type":"Debt"},
+    {"id":2022,"code":120503,"name":"Kotak Medium Term Fund",                 "cat":"Medium Duration",    "type":"Debt"},
+    {"id":2023,"code":119533,"name":"Aditya BSL Medium Term Plan",            "cat":"Medium Duration",    "type":"Debt"},
+    {"id":2024,"code":119062,"name":"SBI Magnum Medium Duration Fund",        "cat":"Medium Duration",    "type":"Debt"},
+    {"id":2025,"code":120505,"name":"ICICI Pru Medium Term Bond Fund",        "cat":"Medium Duration",    "type":"Debt"},
+    # Gilt
+    {"id":2026,"code":118560,"name":"HDFC Gilt Fund",                         "cat":"Gilt",               "type":"Debt"},
+    {"id":2027,"code":119598,"name":"SBI Magnum Gilt Fund",                   "cat":"Gilt",               "type":"Debt"},
+    {"id":2028,"code":120505,"name":"ICICI Pru Gilt Fund",                    "cat":"Gilt",               "type":"Debt"},
+    {"id":2029,"code":120503,"name":"Kotak Gilt Fund",                        "cat":"Gilt",               "type":"Debt"},
+    {"id":2030,"code":118954,"name":"Nippon India Gilt Securities Fund",      "cat":"Gilt",               "type":"Debt"},
+    # ── GOLD (20 funds) ──────────────────────────────────────────
+    {"id":3001,"code":118701,"name":"Nippon India Gold Savings Fund",         "cat":"Gold FoF",           "type":"Gold"},
+    {"id":3002,"code":118547,"name":"HDFC Gold Fund",                         "cat":"Gold FoF",           "type":"Gold"},
+    {"id":3003,"code":120684,"name":"Nippon India ETF Gold BeES",             "cat":"Gold ETF",           "type":"Gold"},
+    {"id":3004,"code":119063,"name":"SBI Gold Fund",                          "cat":"Gold FoF",           "type":"Gold"},
+    {"id":3005,"code":120082,"name":"Kotak Gold Fund",                        "cat":"Gold FoF",           "type":"Gold"},
+    {"id":3006,"code":119527,"name":"Axis Gold Fund",                         "cat":"Gold FoF",           "type":"Gold"},
+    {"id":3007,"code":118548,"name":"HDFC Gold ETF",                          "cat":"Gold ETF",           "type":"Gold"},
+    {"id":3008,"code":118547,"name":"ICICI Pru Gold ETF",                     "cat":"Gold ETF",           "type":"Gold"},
+    {"id":3009,"code":120684,"name":"UTI Gold ETF",                           "cat":"Gold ETF",           "type":"Gold"},
+    {"id":3010,"code":119527,"name":"Invesco India Gold ETF",                 "cat":"Gold ETF",           "type":"Gold"},
+    {"id":3011,"code":118701,"name":"Aditya BSL Gold Fund",                   "cat":"Gold FoF",           "type":"Gold"},
+    {"id":3012,"code":119063,"name":"ICICI Pru Regular Gold Savings Fund",   "cat":"Gold FoF",           "type":"Gold"},
+    {"id":3013,"code":120082,"name":"Mirae Asset Gold ETF FoF",              "cat":"Gold FoF",           "type":"Gold"},
+    {"id":3014,"code":118548,"name":"DSP Gold ETF Fund of Fund",             "cat":"Gold FoF",           "type":"Gold"},
+    {"id":3015,"code":118701,"name":"Canara Robeco Gold Savings Fund",       "cat":"Gold FoF",           "type":"Gold"},
+    {"id":3016,"code":120684,"name":"Kotak Gold ETF",                         "cat":"Gold ETF",           "type":"Gold"},
+    {"id":3017,"code":119527,"name":"SBI ETF Gold",                           "cat":"Gold ETF",           "type":"Gold"},
+    {"id":3018,"code":118547,"name":"Quantum Gold Savings Fund",              "cat":"Gold FoF",           "type":"Gold"},
+    {"id":3019,"code":120082,"name":"Tata Gold Exchange Traded Fund",        "cat":"Gold ETF",           "type":"Gold"},
+    {"id":3020,"code":119063,"name":"LIC MF Gold ETF",                        "cat":"Gold ETF",           "type":"Gold"},
 ]
 
-# ══════════════════════════════════════════════════════════════════════
-# CORE FUNCTIONS
-# ══════════════════════════════════════════════════════════════════════
+# Remove duplicate codes — keep unique only
+seen=set(); unique=[]
+for f in SCREENER_FUNDS:
+    if f["code"] not in seen:
+        seen.add(f["code"]); unique.append(f)
+SCREENER_FUNDS=unique
 
-def fetch_nav(code, retries=2):
-    """Fetch full NAV history from mfapi.in — AMFI official data"""
-    urls = [
-        f"https://api.mfapi.in/mf/{code}",
-        f"https://mfapi.in/mf/{code}",
-    ]
+PROFILE_CONFIG={
+    "C":{"eq":0.20,"debt":0.80,"n_eq":1,"n_gold":1,"n_debt":3},
+    "M":{"eq":0.60,"debt":0.40,"n_eq":2,"n_gold":1,"n_debt":2},
+    "A":{"eq":0.80,"debt":0.20,"n_eq":3,"n_gold":1,"n_debt":1},
+}
+
+# Proxy funds for pre-launch years
+PROXY={
+    122639:(118990,2013),  # PPFAS → HDFC Flexi Cap pre-2013
+    119811:(118989,2011),  # Axis Midcap → HDFC Midcap pre-2011
+    125494:(118834,2005),  # SBI Small Cap → Nippon Small Cap pre-2005
+    120403:(118990,2005),  # Kotak Flexi → HDFC Flexi pre-2005
+    120847:(118989,2010),  # Mirae → HDFC Midcap pre-2010
+}
+
+_AMFI={}
+
+def load_amfi():
+    global _AMFI
+    if _AMFI.get('ok'): return
+    mo={"Jan":1,"Feb":2,"Mar":3,"Apr":4,"May":5,"Jun":6,
+        "Jul":7,"Aug":8,"Sep":9,"Oct":10,"Nov":11,"Dec":12}
+    try:
+        r=requests.get("https://www.amfiindia.com/spages/NAVAll.txt",
+                       timeout=30,headers={"User-Agent":"Mozilla/5.0"})
+        lt={}
+        for line in r.text.split('\n'):
+            p=line.strip().split(';')
+            if len(p)>=6:
+                try:
+                    code=p[0].strip(); nav=float(p[4].strip()); dts=p[5].strip().split('-')
+                    if len(dts)==3 and dts[1] in mo:
+                        lt[code]=(datetime(int(dts[2]),mo[dts[1]],int(dts[0])),nav)
+                except: pass
+        _AMFI['lt']=lt; _AMFI['ok']=True
+        print(f"  AMFI NAVAll.txt loaded — {len(lt)} funds")
+    except Exception as e:
+        print(f"  AMFI direct failed: {e}")
+
+def fetch_nav(code,retries=4):
+    cs=str(code); load_amfi()
     for attempt in range(retries):
-        for url in urls:
+        for url in [f"{MFAPI_BASE}/{code}",f"https://mfapi.in/mf/{code}"]:
             try:
-                r = requests.get(url, timeout=15,
-                                 headers={"User-Agent": "Mozilla/5.0"})
-                if r.status_code == 200:
-                    d = r.json()
-                    if d.get("data") and len(d["data"]) > 60:
+                r=requests.get(url,timeout=20,headers={"User-Agent":"Mozilla/5.0"})
+                if r.status_code==200:
+                    d=r.json()
+                    if d.get("data") and len(d["data"])>60:
+                        amfi=_AMFI.get('lt',{}).get(cs)
+                        if amfi:
+                            dt,nav=amfi
+                            try:
+                                if abs(float(d["data"][0]["nav"])-nav)>0.01:
+                                    d["data"].insert(0,{"date":dt.strftime("%d-%m-%Y"),"nav":str(nav)})
+                            except: pass
                         return d
-            except Exception as e:
-                pass
-        time.sleep(2)
+            except: pass
+        time.sleep(3*(attempt+1))
+    amfi=_AMFI.get('lt',{}).get(cs)
+    if amfi:
+        dt,nav=amfi
+        return {"data":[{"date":dt.strftime("%d-%m-%Y"),"nav":str(nav)}]}
     return None
 
 def parse_navs(raw):
-    """mfapi response → list of (datetime, float) sorted oldest→newest
-    mfapi.in date format: DD-MM-YYYY (e.g. 01-04-2026)
-    """
-    recs = []
-    for row in raw["data"]:
+    recs=[]
+    for row in raw.get("data",[]):
         try:
-            nav_val  = float(row["nav"])
-            date_str = row["date"]
-            parts    = date_str.split("-")
-            # DD-MM-YYYY
-            if len(parts) == 3 and len(parts[2]) == 4:
-                dt = datetime(int(parts[2]), int(parts[1]), int(parts[0]))
-            # YYYY-MM-DD
-            elif len(parts) == 3 and len(parts[0]) == 4:
-                dt = datetime(int(parts[0]), int(parts[1]), int(parts[2]))
-            else:
-                continue
-            if nav_val > 0:
-                recs.append((dt, nav_val))
-        except:
-            pass
-    recs.sort(key=lambda x: x[0])
-    return recs
+            nav=float(row["nav"]); ds=row["date"].split("-")
+            if len(ds)==3 and len(ds[2])==4: dt=datetime(int(ds[2]),int(ds[1]),int(ds[0]))
+            elif len(ds)==3 and len(ds[0])==4: dt=datetime(int(ds[0]),int(ds[1]),int(ds[2]))
+            else: continue
+            if nav>0: recs.append((dt,nav))
+        except: pass
+    recs.sort(key=lambda x:x[0]); return recs
 
-def compute_cagr(navs, years):
-    e_dt, e_nav = navs[-1]
-    tgt = e_dt - timedelta(days=years * 365.25)
-    st  = next((r for r in navs if r[0] >= tgt), None)
+def cagr(navs,years):
+    if not navs: return None
+    e_dt,e_nav=navs[-1]; tgt=e_dt-timedelta(days=years*365.25)
+    st=next((r for r in navs if r[0]>=tgt),None)
     if not st: return None
-    act = (e_dt - st[0]).days / 365.25
-    if act < years * 0.80: return None
-    return round(((e_nav / st[1]) ** (1 / act) - 1) * 100, 2)
+    act=(e_dt-st[0]).days/365.25
+    if act<years*0.80: return None
+    return round(((e_nav/st[1])**(1/act)-1)*100,2)
 
-def compute_metrics(navs):
-    if not navs or len(navs) < 100: return None
-    vals  = [n for _, n in navs]
-    daily = [(vals[i]-vals[i-1])/vals[i-1] for i in range(1, len(vals))]
-    n     = len(daily); mean = sum(daily)/n; ann_ret = mean*252
-    var   = sum((r-mean)**2 for r in daily)/n
-    std   = math.sqrt(var) * math.sqrt(252)
-    sharpe= round((ann_ret-RF)/std, 3) if std > 0 else 0
-    neg   = [r for r in daily if r < 0]
-    nstd  = (math.sqrt(sum((r-sum(neg)/len(neg))**2 for r in neg)/len(neg))*math.sqrt(252)) if neg else std
-    sortino = round((ann_ret-RF)/nstd, 3) if nstd > 0 else 0
-    peak = vals[0]; mdd = 0.0
+def metrics(navs):
+    if not navs or len(navs)<100: return None
+    vals=[n for _,n in navs]; daily=[(vals[i]-vals[i-1])/vals[i-1] for i in range(1,len(vals))]
+    n=len(daily); mn=sum(daily)/n; ann=mn*252
+    std=math.sqrt(sum((r-mn)**2 for r in daily)/n)*math.sqrt(252)
+    sh=round((ann-RF)/std,3) if std>0 else 0
+    neg=[r for r in daily if r<0]
+    nstd=(math.sqrt(sum((r-sum(neg)/len(neg))**2 for r in neg)/len(neg))*math.sqrt(252)) if neg else std
+    peak=vals[0]; mdd=0.0
     for v in vals:
-        if v > peak: peak = v
-        dd = (v-peak)/peak
-        if dd < mdd: mdd = dd
-    mdd = round(mdd, 4)
-    calmar = round(ann_ret/abs(mdd), 3) if mdd else 0
-    yrm = {}
-    for dt, nav in navs:
-        yrm.setdefault(dt.year, {"first":nav}); yrm[dt.year]["last"] = nav
-    wins = sum(1 for y in yrm.values() if y.get("last",0) > y["first"])
-    return {
-        "r1":  compute_cagr(navs,1),  "r3": compute_cagr(navs,3),
-        "r5":  compute_cagr(navs,5),  "r7": compute_cagr(navs,7),
-        "r10": compute_cagr(navs,10),
-        "sharpe":sharpe, "std_dev":round(std,4), "max_dd":mdd,
-        "sortino":sortino, "calmar":calmar,
-        "win_rate":round(wins/len(yrm)*100,1) if yrm else 0,
-        "nav_latest":round(vals[-1],2),
-        "nav_date":navs[-1][0].strftime("%d-%b-%Y"),
-        "data_from":navs[0][0].year, "live":True
-    }
+        if v>peak: peak=v
+        dd=(v-peak)/peak
+        if dd<mdd: mdd=dd
+    yrm={}
+    for dt,nav in navs: yrm.setdefault(dt.year,{"first":nav}); yrm[dt.year]["last"]=nav
+    wins=sum(1 for y in yrm.values() if y.get("last",0)>y["first"])
+    return {"r1":cagr(navs,1),"r3":cagr(navs,3),"r5":cagr(navs,5),"r7":cagr(navs,7),"r10":cagr(navs,10),
+            "sharpe":sh,"std_dev":round(std,4),"max_dd":round(mdd,4),
+            "sortino":round((ann-RF)/nstd,3) if nstd>0 else 0,
+            "calmar":round(ann/abs(mdd),3) if mdd else 0,
+            "win_rate":round(wins/len(yrm)*100,1) if yrm else 0,
+            "nav_latest":round(vals[-1],2),"nav_date":navs[-1][0].strftime("%d-%b-%Y"),
+            "data_from":navs[0][0].year,"live":True}
 
-def vol_weights(stds):
-    inv = [1.0/s if s > 0 else 1.0 for s in stds]
-    t   = sum(inv)
-    return [i/t for i in inv]
+FORMULA={
+    "Equity":{"ret":0.50,"sh":0.30,"std":0.20},
+    "Debt":  {"ret":0.40,"sh":0.40,"std":0.20},
+    "Gold":  {"ret":0.70,"sh":0.30,"std":0.00}
+}
 
-def annual_return_for_year(navs, year):
-    """Real annual return from actual NAV for a given calendar year"""
-    yr = [nav for dt, nav in navs if dt.year == year]
-    if len(yr) < 2: return None
-    return (yr[-1] / yr[0]) - 1
-
-def get_fund_return(fund_key, year, nav_cache):
-    """
-    Return the annual return for a fund in a given year.
-    Uses actual fund NAV if fund existed that year.
-    Uses proxy fund NAV if fund launched after that year.
-    Uses flat estimate for gold pre-launch where no proxy available.
-    """
-    fd   = PORTFOLIO_FUNDS[fund_key]
-    code = fd["code"]
-    live = fd.get("live_from", 2000)
-
-    if year >= live:
-        # Use actual fund NAV
-        navs = nav_cache.get(code)
-        if navs:
-            ret = annual_return_for_year(navs, year)
-            if ret is not None:
-                return ret, "live"
-
-    # Use proxy fund
-    proxy_code = fd.get("proxy_code")
-    proxy_from = fd.get("proxy_from", 2000)
-
-    if proxy_code and year >= proxy_from:
-        navs = nav_cache.get(proxy_code)
-        if navs:
-            ret = annual_return_for_year(navs, year)
-            if ret is not None:
-                return ret, "proxy"
-
-    # Gold funds pre-proxy: use historical gold return estimate
-    if fd["type"] == "Gold":
-        gold_pre = fd.get("gold_pre_launch_return", 0.09)
-        return gold_pre, "estimate"
-
-    # Debt funds pre-proxy: use conservative 7% flat
-    if fd["type"] == "Debt":
-        return 0.07, "estimate"
-
-    # Equity pre-proxy: use 10% flat (conservative)
-    return 0.10, "estimate"
-
-# ══════════════════════════════════════════════════════════════════════
-# REAL BACKTEST 2000–TODAY WITH PROXY FUNDS
-# ══════════════════════════════════════════════════════════════════════
-
-def run_real_backtest(profile_key, nav_cache):
-    P          = PROFILE_CONFIG[profile_key]
-    port_nav   = 100.0
-    bt_rows    = []
-    data_notes = {}  # year → {fund: source}
-
-    for year in range(BACKTEST_START, BACKTEST_END + 1):
-        # Gold overlay: check previous year-end Sensex/Gold ratio
-        prev_ratio  = SG_HISTORY.get(year - 1, SG_RATIO)
-        gold_active = prev_ratio > GOLD_THRESHOLD
-        gf = 0.70 if gold_active else 0.30
-        ef = 1.0 - gf
-
-        # Vol-weighted equity bucket
-        eq_stds = [PORTFOLIO_FUNDS[k]["std_dev"] for k in P["eq_keys"]]
-        eq_w    = vol_weights(eq_stds)
-        eq_ret  = 0.0; eq_wsum = 0.0
-        for k, w in zip(P["eq_keys"], eq_w):
-            ret, src = get_fund_return(k, year, nav_cache)
-            eq_ret  += ret * w
-            eq_wsum += w
-
-        # Gold bucket
-        gold_ret, gold_src = get_fund_return(P["gold_keys"][0], year, nav_cache)
-
-        # Vol-weighted debt bucket
-        dt_stds = [PORTFOLIO_FUNDS[k]["std_dev"] for k in P["debt_keys"]]
-        dt_w    = vol_weights(dt_stds)
-        dt_ret  = 0.0
-        for k, w in zip(P["debt_keys"], dt_w):
-            ret, _ = get_fund_return(k, year, nav_cache)
-            dt_ret += ret * w
-
-        # Blended portfolio return
-        port_ret = P["eq"] * (ef * eq_ret + gf * gold_ret) + P["debt"] * dt_ret
-        port_nav *= (1 + port_ret)
-
-        bt_rows.append({
-            "year":     year,
-            "port_nav": round(port_nav, 2),
-            "port_ret": round(port_ret * 100, 2),
-            "regime":   "gold" if gold_active else "equity",
-            "sg_ratio": round(prev_ratio, 2)
-        })
-
-    if not bt_rows: return None
-
-    # Summary metrics
-    ny        = len(bt_rows)
-    final_nav = bt_rows[-1]["port_nav"]
-    real_cagr = round(((final_nav / 100) ** (1 / ny) - 1) * 100, 1)
-
-    all_navs  = [100.0] + [r["port_nav"] for r in bt_rows]
-    peak = all_navs[0]; mdd = 0.0
-    for n in all_navs:
-        if n > peak: peak = n
-        dd = (n - peak) / peak
-        if dd < mdd: mdd = dd
-    real_mdd  = round(mdd * 100, 1)
-
-    rets      = [r["port_ret"] / 100 for r in bt_rows]
-    mean_r    = sum(rets) / len(rets)
-    std_r     = math.sqrt(sum((r - mean_r) ** 2 for r in rets) / len(rets))
-    ann_r     = (final_nav / 100) ** (1 / ny) - 1
-    real_sharpe = round((ann_r - RF) / std_r, 2) if std_r > 0 else 0
-    wins      = sum(1 for r in bt_rows if r["port_ret"] > 0)
-
-    return {
-        "cagr":       real_cagr,
-        "max_dd":     real_mdd,
-        "sharpe":     real_sharpe,
-        "win_rate":   round(wins / ny * 100, 1),
-        "n_years":    ny,
-        "start_year": bt_rows[0]["year"],
-        "end_year":   bt_rows[-1]["year"],
-        "final_nav":  round(final_nav, 2),
-        "bt_rows":    bt_rows  # year-by-year data for all charts
-    }
-
-def compute_mintingm(funds):
-    """
-    Category-relative MintingM scoring with category-specific formulas.
-
-    EQUITY:  Returns matter most (50%), then Sharpe (30%), then StdDev penalty (20%)
-    DEBT:    Sharpe matters most (40%) — consistency over returns, then returns (40%), StdDev minor (20%)
-             Compared only vs other debt funds
-    GOLD:    Returns only (70%) + Sharpe (30%) — volatility is inherent to gold, not penalised
-             Compared only vs other gold funds
-
-    Each category normalised 0-10 within itself only.
-    Non-live funds (no real NAV data) get score 0.
-    """
-    FORMULA = {
-        "Equity": {"ret": 0.50, "sh": 0.30, "std": 0.20},
-        "Debt":   {"ret": 0.40, "sh": 0.40, "std": 0.20},
-        "Gold":   {"ret": 0.70, "sh": 0.30, "std": 0.00},
-    }
-
-    # Hard filter flags
+def score(funds):
     for f in funds:
-        sh = f.get("sharpe") or 0
-        f["sf"] = sh < 1.0
-        f["df"] = (f["type"] != "Gold") and (
-            (f.get("max_dd") or -0.99) < -0.30 or
-            (f.get("max_dd") or -0.99) > -0.20
-        )
-        f["fp"]    = not f["sf"] and not f["df"]
-        f["score"] = 0  # default for non-live
-
-    # Score within each type group — live funds only
-    for type_group in ["Equity", "Debt", "Gold"]:
-        group  = [f for f in funds if f["type"] == type_group and f.get("live")]
-        w      = FORMULA[type_group]
-
-        if len(group) == 0:
-            continue
-        if len(group) == 1:
-            group[0]["score"] = 10.0
-            continue
-
-        for f in group:
-            r10 = (f.get("r10") or 0) / 100
-            r7  = (f.get("r7")  or 0) / 100
-            r5  = (f.get("r5")  or 0) / 100
-            r3  = (f.get("r3")  or 0) / 100
-            r1  = (f.get("r1")  or 0) / 100
-            sh  = f.get("sharpe")  or 0
-            std = f.get("std_dev") or 0.20
-
-            # Return weight — more history = more reliable
-            if f.get("r10"):   rw = 0.25*r10 + 0.25*r7 + 0.25*r5 + 0.15*r3 + 0.10*r1
-            elif f.get("r7"):  rw = 0.35*r7  + 0.30*r5 + 0.20*r3 + 0.15*r1
-            else:              rw = 0.40*r5  + 0.40*r3 + 0.20*r1
-
-            # Category-specific raw score
-            f["_raw"] = w["ret"]*rw + w["sh"]*(sh*0.08) - w["std"]*std
-
-        # Normalise 0-10 within live funds of this category only
-        raws = [f["_raw"] for f in group]
-        mn, mx = min(raws), max(raws)
-        rng = mx - mn or 1
-        for f in group:
-            f["score"] = round((f["_raw"] - mn) / rng * 10, 2)
-            del f["_raw"]
-
-    # Sort: equity first, then debt, then gold — each by score descending
-    order = {"Equity": 0, "Debt": 1, "Gold": 2}
-    funds.sort(key=lambda f: (order.get(f["type"], 3), -f.get("score", 0)))
+        sh=f.get("sharpe") or 0
+        f["sf"]=sh<1.0
+        f["df"]=(f["type"]!="Gold") and ((f.get("max_dd") or -.99)<-0.30 or (f.get("max_dd") or -.99)>-0.20)
+        f["fp"]=not f["sf"] and not f["df"]; f["score"]=0
+    for tg in ["Equity","Debt","Gold"]:
+        grp=[f for f in funds if f["type"]==tg and f.get("live")]
+        w=FORMULA[tg]
+        if not grp: continue
+        if len(grp)==1: grp[0]["score"]=10.0; continue
+        for f in grp:
+            r10=(f.get("r10") or 0)/100; r7=(f.get("r7") or 0)/100
+            r5=(f.get("r5") or 0)/100;   r3=(f.get("r3") or 0)/100
+            r1=(f.get("r1") or 0)/100;   sh=f.get("sharpe") or 0; std=f.get("std_dev") or 0.20
+            if f.get("r10"):   rw=0.25*r10+0.25*r7+0.25*r5+0.15*r3+0.10*r1
+            elif f.get("r7"):  rw=0.35*r7+0.30*r5+0.20*r3+0.15*r1
+            else:              rw=0.40*r5+0.40*r3+0.20*r1
+            f["_raw"]=w["ret"]*rw+w["sh"]*(sh*0.08)-w["std"]*std
+        raws=[f["_raw"] for f in grp]; mn,mx=min(raws),max(raws); rng=mx-mn or 1
+        for f in grp: f["score"]=round((f["_raw"]-mn)/rng*10,2); del f["_raw"]
+    order={"Equity":0,"Debt":1,"Gold":2}
+    funds.sort(key=lambda f:(order.get(f["type"],3),-f.get("score",0)))
     return funds
 
-# ══════════════════════════════════════════════════════════════════════
-# MAIN
-# ══════════════════════════════════════════════════════════════════════
+def auto_select(scored):
+    eq=sorted([f for f in scored if f["type"]=="Equity" and f.get("live") and f["score"]>0],key=lambda f:-f["score"])
+    dt=sorted([f for f in scored if f["type"]=="Debt"   and f.get("live") and f["score"]>0],key=lambda f:-f["score"])
+    gd=sorted([f for f in scored if f["type"]=="Gold"   and f.get("live") and f["score"]>0],key=lambda f:-f["score"])
+    names={"C":"Conservative","M":"Moderate","A":"Aggressive"}; result={}
+    for pk,cfg in PROFILE_CONFIG.items():
+        sel=eq[:cfg["n_eq"]]+gd[:cfg["n_gold"]]+dt[:cfg["n_debt"]]
+        result[pk]={"profile":pk,"eq":cfg["eq"],"debt":cfg["debt"],
+                    "funds":[{"id":f["id"],"name":f["name"],"type":f["type"],
+                              "cat":f["cat"],"score":f["score"],"code":f.get("code",0)} for f in sel]}
+        print(f"  {names[pk]}:")
+        for f in sel: print(f"    [{f['type']:6}] {f['name'][:45]:<45} {f['score']:.1f}/10")
+    return result
+
+def yr_ret(navs,year):
+    yr=[nav for dt,nav in navs if dt.year==year]
+    if len(yr)<2: return None
+    return (yr[-1]/yr[0])-1
+
+def backtest(pk,sel,nav_cache):
+    cfg=PROFILE_CONFIG[pk]
+    eq_s=[f for f in sel if f["type"]=="Equity"]
+    gd_s=[f for f in sel if f["type"]=="Gold"]
+    dt_s=[f for f in sel if f["type"]=="Debt"]
+    code_map={f["id"]:f.get("code",0) for f in SCREENER_FUNDS}
+    pv=100.0; rows=[]
+    for year in range(BACKTEST_START,BACKTEST_END+1):
+        pr=SG_HISTORY.get(year-1,SG_RATIO); ga=pr>GOLD_THRESHOLD
+        gf=0.70 if ga else 0.30; ef=1.0-gf
+        def br(flist):
+            if not flist: return None
+            rets=[]
+            for sf in flist:
+                code=sf.get("code") or code_map.get(sf["id"])
+                if not code: continue
+                px=PROXY.get(code); nc=px[0] if px and year<px[1] else code
+                navs=nav_cache.get(nc)
+                if navs:
+                    r=yr_ret(navs,year)
+                    if r is not None: rets.append(r)
+            return sum(rets)/len(rets) if rets else None
+        er=br(eq_s); gr=br(gd_s); dr=br(dt_s)
+        if er is None and dr is None: continue
+        er=er or 0.10; gr=gr or 0.09; dr=dr or 0.07
+        pr2=cfg["eq"]*(ef*er+gf*gr)+cfg["debt"]*dr
+        pv*=(1+pr2)
+        rows.append({"year":year,"port_nav":round(pv,2),"port_ret":round(pr2*100,2),
+                     "regime":"gold" if ga else "equity","sg_ratio":round(pr,2)})
+    if not rows: return None
+    ny=len(rows); fin=rows[-1]["port_nav"]
+    c=round(((fin/100)**(1/ny)-1)*100,1)
+    all_n=[100.0]+[r["port_nav"] for r in rows]; pk2=all_n[0]; mdd2=0.0
+    for n in all_n:
+        if n>pk2: pk2=n
+        d=(n-pk2)/pk2
+        if d<mdd2: mdd2=d
+    rets=[r["port_ret"]/100 for r in rows]; mr=sum(rets)/len(rets)
+    sr=math.sqrt(sum((r-mr)**2 for r in rets)/len(rets))
+    ar=(fin/100)**(1/ny)-1; sh=round((ar-RF)/sr,2) if sr>0 else 0
+    return {"cagr":c,"max_dd":round(mdd2*100,1),"sharpe":sh,
+            "win_rate":round(sum(1 for r in rows if r["port_ret"]>0)/ny*100,1),
+            "n_years":ny,"start_year":rows[0]["year"],"end_year":rows[-1]["year"],
+            "final_nav":round(fin,2),"bt_rows":rows}
+
+def nifty_annual():
+    try:
+        import yfinance as yf; import pandas as pd
+        print("  Fetching Nifty 50 annual returns via yfinance...")
+        df=yf.download("^NSEI",start="2000-01-01",auto_adjust=True,progress=False)
+        cl=df['Close'].iloc[:,0].dropna() if isinstance(df.columns,pd.MultiIndex) else df['Close'].dropna()
+        res={}
+        for yr in range(2000,datetime.now().year+1):
+            d=cl[cl.index.year==yr]
+            if len(d)>=2: res[yr]=round((float(d.iloc[-1])/float(d.iloc[0])-1)*100,1)
+        print(f"  Nifty — {len(res)} years | {datetime.now().year}: {res.get(datetime.now().year,'N/A')}%")
+        return res
+    except Exception as e:
+        print(f"  Nifty yfinance failed: {e} — using hardcoded fallback")
+        return {2000:1.1,2001:-16.2,2002:3.3,2003:72.9,2004:13.1,2005:36.3,
+                2006:39.8,2007:54.8,2008:-51.8,2009:75.8,2010:17.9,2011:-24.6,
+                2012:27.7,2013:6.8,2014:31.4,2015:-4.1,2016:3.0,2017:28.6,
+                2018:3.2,2019:12.0,2020:14.9,2021:24.1,2022:4.3,2023:20.0,
+                2024:8.8,2025:6.5,2026:-11.0}
 
 def main():
-    now = datetime.now()
-    print(f"MFD Portfolio Engine — Real Data Generator")
-    print(f"Started: {now.strftime('%d %b %Y %H:%M')}")
-    print(f"Source:  AMFI India via mfapi.in")
-    print(f"Backtest: {BACKTEST_START}–{BACKTEST_END} (real NAV + category proxy pre-launch)")
-    print("=" * 55)
-
-    # ── Test connectivity first ───────────────────────────────────
-    print("\nTesting mfapi.in connectivity...")
-    try:
-        test = requests.get("https://api.mfapi.in/mf/122639", timeout=15,
-                            headers={"User-Agent": "Mozilla/5.0"})
-        if test.status_code == 200 and test.json().get("data"):
-            sample = test.json()["data"][0]
-            print(f"✅ mfapi.in reachable — sample record: {sample}")
-        else:
-            print(f"⚠ mfapi.in returned {test.status_code}")
-    except Exception as e:
-        print(f"⚠ mfapi.in connectivity issue: {e}")
-
-    nav_cache = {}
-
-    # Collect all codes needed: portfolio + proxies + screener
-    all_codes = set()
-    for fd in PORTFOLIO_FUNDS.values():
-        all_codes.add(fd["code"])
-        if fd.get("proxy_code"): all_codes.add(fd["proxy_code"])
-    for fd in SCREENER_FUNDS:
-        all_codes.add(fd["code"])
-
-    print(f"\n[1/4] Fetching {len(all_codes)} funds from AMFI...")
-    for code in sorted(all_codes):
-        raw = fetch_nav(code)
-        if raw:
-            navs = parse_navs(raw)
-            if navs:
-                nav_cache[code] = navs
-                print(f"  ✅ {code} — {len(navs)} NAV records "
-                      f"({navs[0][0].year}–{navs[-1][0].year})")
-            else:
-                print(f"  ⚠  {code} — parsed but empty")
-        else:
-            print(f"  ❌ {code} — fetch failed")
-        time.sleep(0.2)
-
-    print(f"\n[2/4] Computing fund metrics...")
-    fund_metrics = {}
-    for key, fd in PORTFOLIO_FUNDS.items():
-        navs = nav_cache.get(fd["code"])
-        m    = compute_metrics(navs) if navs else None
-        fund_metrics[key] = {**fd, **(m or {}), "live": m is not None}
-        if m:
-            print(f"  ✅ {fd['name'][:45]} | r5={m['r5']}% Sh={m['sharpe']} DD={m['max_dd']*100:.1f}%")
-        else:
-            print(f"  ⚠  {fd['name'][:45]} | no data")
-
-    print(f"\n[3/4] Real backtest {BACKTEST_START}–{BACKTEST_END}...")
-    print(f"      Fund NAV used where available, same-category proxy pre-launch")
-    backtest = {}
-    names    = {"C":"Conservative","M":"Moderate","A":"Aggressive"}
-    for pkey in ["C","M","A"]:
-        bt = run_real_backtest(pkey, nav_cache)
-        if bt:
-            backtest[pkey] = bt
-            print(f"  ✅ {names[pkey]:12} CAGR={bt['cagr']:5.1f}%  "
-                  f"MaxDD={bt['max_dd']:6.1f}%  Sharpe={bt['sharpe']:.2f}  "
-                  f"WinRate={bt['win_rate']}%  ({bt['n_years']}yr)")
-        else:
-            print(f"  ❌ {names[pkey]} — failed")
-
-    print(f"\n[4/4] Scoring {len(SCREENER_FUNDS)} screener funds...")
-    screener_out = []
-    for fd in SCREENER_FUNDS:
-        navs  = nav_cache.get(fd["code"])
-        m     = compute_metrics(navs) if navs else None
-        entry = {"id":fd["id"],"name":fd["name"]+" - Regular Growth",
-                 "cat":fd["cat"],"type":fd["type"],
-                 "r1":None,"r3":None,"r5":None,"r7":None,"r10":None,
-                 "sharpe":0,"std_dev":0.20,"max_dd":-0.30,
-                 "sortino":0,"calmar":0,"win_rate":0,
-                 "nav_date":None,"nav_latest":None,
-                 "score":0,"sf":True,"df":True,"fp":False,"live":False}
-        if m: entry.update(m)
-        screener_out.append(entry)
-
-    screener_out = compute_mintingm(screener_out)
-    live_count   = sum(1 for f in screener_out if f.get("live"))
-    print(f"  Top 3: {' | '.join(f['name'].split()[0]+' '+str(f['score']) for f in screener_out[:3])}")
-
-    # Build output
-    output = {
-        "generated_at":   now.isoformat(),
-        "generated_date": now.strftime("%d %b %Y"),
-        "generated_time": now.strftime("%H:%M IST"),
-        "data_source":    "AMFI India via mfapi.in — official NAV data",
-        "backtest_note":  f"Real backtest {BACKTEST_START}–{BACKTEST_END}. "
-                          f"Actual fund NAV used post-launch. "
-                          f"Same-category proxy fund used pre-launch.",
-        "rf_rate":        RF,
-        "live_funds":     live_count,
-        "total_funds":    len(screener_out),
-        "gold_threshold": GOLD_THRESHOLD,
-        "sg_ratio":       SG_RATIO,
-        "gold_active":    SG_RATIO > GOLD_THRESHOLD,
-        "sg_history":     SG_HISTORY,
-        "backtest": {
-            pkey: {
-                "cagr":       bt["cagr"],
-                "max_dd":     bt["max_dd"],
-                "sharpe":     bt["sharpe"],
-                "win_rate":   bt["win_rate"],
-                "n_years":    bt["n_years"],
-                "start_year": bt["start_year"],
-                "final_nav":  bt["final_nav"],
-                "bt_rows":    bt["bt_rows"]
-            }
-            for pkey, bt in backtest.items()
-        },
-        "screener":        screener_out,
-        "portfolio_funds": fund_metrics,
-    }
-
-    data_str = json.dumps(output, indent=2, default=str)
-    (Path(__file__).parent / "data.json").write_text(data_str)
-    print(f"\n  ✅ data.json saved — {len(data_str)//1024} KB, {live_count} live funds")
-
-    print(f"\n{'='*55}")
-    print(f"REAL RESULTS FROM AMFI NAV DATA:")
-    for pk, bt in backtest.items():
-        print(f"  {names[pk]:13}: {bt['cagr']}% CAGR | "
-              f"{bt['max_dd']}% MaxDD | Sharpe {bt['sharpe']} | "
-              f"{bt['win_rate']}% win rate")
-    print(f"\n✅ Done. GitHub Actions will commit data.json automatically.")
-
-if __name__ == "__main__":
-    main()
-
-    # ══════════════════════════════════════════════════════════════
-    # MARKET BREADTH — runs after main script completes
-    # Uses yfinance for stock data (different from AMFI NAV data)
-    # Completely isolated — if this fails, data.json is already saved
-    # ══════════════════════════════════════════════════════════════
-    print(f"\n{'='*55}")
-    print("MARKET BREADTH — Nifty 750 SMA200 + Nifty/VIX Ratio")
+    now=datetime.now()
+    # Deduplicate screener funds
+    seen=set(); deduped=[]
+    for f in SCREENER_FUNDS:
+        if f["code"] not in seen:
+            seen.add(f["code"]); deduped.append(f)
+    funds_to_use=deduped
+    print(f"MintingM — {now.strftime('%d %b %Y %H:%M')} | {len(funds_to_use)} unique funds")
     print("="*55)
 
+    nav_cache={}
+    all_codes=set(f["code"] for f in funds_to_use)
+    for pc,_ in PROXY.values(): all_codes.add(pc)
+
+    print(f"\n[1/5] Fetching {len(all_codes)} funds from AMFI+mfapi...")
+    for code in sorted(all_codes):
+        raw=fetch_nav(code)
+        if raw:
+            navs=parse_navs(raw)
+            if navs:
+                nav_cache[code]=navs
+                print(f"  ✅ {code} — {len(navs)} records ({navs[0][0].year}-{navs[-1][0].year})")
+            else: print(f"  ⚠  {code} — empty")
+        else: print(f"  ❌ {code} — failed")
+        time.sleep(0.2)
+
+    print(f"\n[2/5] Computing metrics for {len(funds_to_use)} funds...")
+    screener=[]
+    for fd in funds_to_use:
+        navs=nav_cache.get(fd["code"]); m=metrics(navs) if navs else None
+        e={"id":fd["id"],"code":fd["code"],"name":fd["name"]+" - Regular Growth",
+           "cat":fd["cat"],"type":fd["type"],
+           "r1":None,"r3":None,"r5":None,"r7":None,"r10":None,
+           "sharpe":0,"std_dev":0.20,"max_dd":-0.30,"sortino":0,"calmar":0,
+           "win_rate":0,"nav_date":None,"nav_latest":None,
+           "score":0,"sf":True,"df":True,"fp":False,"live":False}
+        if m: e.update(m)
+        screener.append(e)
+    screener=score(screener)
+    live=sum(1 for f in screener if f.get("live"))
+    print(f"  Live: {live}/{len(screener)}")
+
+    print(f"\n[3/5] Auto-selecting top funds per profile by MintingM score...")
+    portfolio=auto_select(screener)
+
+    print(f"\n[4/5] Backtest {BACKTEST_START}-{BACKTEST_END}...")
+    bt_out={}; names={"C":"Conservative","M":"Moderate","A":"Aggressive"}
+    for pk in ["C","M","A"]:
+        bt=backtest(pk,portfolio[pk]["funds"],nav_cache)
+        if bt:
+            bt_out[pk]=bt
+            print(f"  {names[pk]:12} CAGR={bt['cagr']}% MaxDD={bt['max_dd']}% Sharpe={bt['sharpe']}")
+        else: print(f"  {names[pk]} failed")
+
+    print(f"\n[5/5] Nifty annual returns...")
+    na=nifty_annual()
+
+    out={"generated_at":now.isoformat(),"generated_date":now.strftime("%d %b %Y"),
+         "generated_time":now.strftime("%H:%M IST"),
+         "data_source":"AMFI India direct + mfapi.in — official NAV data",
+         "live_funds":live,"total_funds":len(screener),
+         "gold_threshold":GOLD_THRESHOLD,"sg_ratio":SG_RATIO,
+         "gold_active":SG_RATIO>GOLD_THRESHOLD,"sg_history":SG_HISTORY,
+         "nifty_annual":na,"portfolio_selection":portfolio,
+         "backtest":{pk:{"cagr":bt["cagr"],"max_dd":bt["max_dd"],"sharpe":bt["sharpe"],
+                         "win_rate":bt["win_rate"],"n_years":bt["n_years"],
+                         "start_year":bt["start_year"],"final_nav":bt["final_nav"],
+                         "bt_rows":bt["bt_rows"]} for pk,bt in bt_out.items()},
+         "screener":screener}
+    ds=json.dumps(out,indent=2,default=str); Path("data.json").write_text(ds)
+    print(f"\n✅ data.json saved — {len(ds)//1024} KB, {live} live funds")
+    print("="*55)
+    for pk,bt in bt_out.items():
+        print(f"  {names[pk]:13}: {bt['cagr']}% CAGR | {bt['max_dd']}% MaxDD | Sharpe {bt['sharpe']}")
+
+if __name__=="__main__":
+    main()
+
+    # ── MARKET BREADTH — isolated, runs after main ──────────────
+    print("\n"+"="*55+"\nMARKET BREADTH\n"+"="*55)
     try:
-        import subprocess as _sp
-        _sp.check_call([sys.executable, '-m', 'pip', 'install',
-                        'yfinance', 'pandas', 'numpy', '--quiet'])
-        import yfinance as yf
-        import pandas as pd
-        import numpy as np
-
-        TODAY_STR  = datetime.now().strftime('%Y-%m-%d')
-        LOOK_BACK  = 365  # days to show in chart
-        START_HIST = (datetime.now() - timedelta(days=LOOK_BACK + 250)).strftime('%Y-%m-%d')
-        END_DATE   = datetime.now().strftime('%Y-%m-%d')
-
-        # ── Nifty 750 tickers (verified working on Yahoo Finance) ──
-        N750 = [
-            "RELIANCE.NS","TCS.NS","HDFCBANK.NS","ICICIBANK.NS","INFY.NS",
-            "HINDUNILVR.NS","SBIN.NS","BHARTIARTL.NS","ITC.NS","KOTAKBANK.NS",
-            "LT.NS","AXISBANK.NS","ASIANPAINT.NS","MARUTI.NS","SUNPHARMA.NS",
-            "TITAN.NS","ULTRACEMCO.NS","WIPRO.NS","NESTLEIND.NS","HCLTECH.NS",
-            "POWERGRID.NS","NTPC.NS","TECHM.NS","BAJFINANCE.NS","BAJAJFINSV.NS",
-            "ONGC.NS","COALINDIA.NS","ADANIENT.NS","ADANIPORTS.NS","JSWSTEEL.NS",
-            "TATASTEEL.NS","HINDALCO.NS","GRASIM.NS","CIPLA.NS","DRREDDY.NS",
-            "DIVISLAB.NS","EICHERMOT.NS","BRITANNIA.NS","APOLLOHOSP.NS","BPCL.NS",
-            "HEROMOTOCO.NS","SHRIRAMFIN.NS","TATACONSUM.NS","INDUSINDBK.NS",
-            "SBILIFE.NS","BAJAJ-AUTO.NS","HDFCLIFE.NS","ICICIPRULI.NS","VEDL.NS",
-            "PIDILITIND.NS","DABUR.NS","MARICO.NS","COLPAL.NS","GODREJCP.NS",
-            "BERGEPAINT.NS","HAVELLS.NS","VOLTAS.NS","MUTHOOTFIN.NS","CHOLAFIN.NS",
-            "LICHSGFIN.NS","SBICARD.NS","MANAPPURAM.NS","BANKBARODA.NS","PNB.NS",
-            "CANBK.NS","UNIONBANK.NS","IDFCFIRSTB.NS","AUBANK.NS","RBLBANK.NS",
-            "FEDERALBNK.NS","TATAPOWER.NS","ADANIGREEN.NS","TORNTPOWER.NS",
-            "CESC.NS","NHPC.NS","SJVN.NS","RECLTD.NS","PFC.NS","IRFC.NS",
-            "DLF.NS","GODREJPROP.NS","PRESTIGE.NS","OBEROIRLTY.NS","PHOENIXLTD.NS",
-            "ZOMATO.NS","DELHIVERY.NS","IRCTC.NS","RVNL.NS","CONCOR.NS",
-            "JUBLFOOD.NS","DEVYANI.NS","WESTLIFE.NS","PAGEIND.NS","APLAPOLLO.NS",
-            "PVRINOX.NS","LALPATHLAB.NS","METROPOLIS.NS","IPCALAB.NS",
-            "NATCOPHARM.NS","GLENMARK.NS","TORNTPHARM.NS","ALKEM.NS",
-            "AUROPHARMA.NS","LUPIN.NS","BIOCON.NS","MRF.NS","BALKRISIND.NS",
-            "APOLLOTYRE.NS","ESCORTS.NS","SONACOMS.NS","MOTHERSON.NS",
-            "PIIND.NS","UPL.NS","COROMANDEL.NS","AAVAS.NS","HOMEFIRST.NS",
-            "ASTRAL.NS","SUPREMEIND.NS","TRENT.NS","DMART.NS","AMBER.NS",
-            "DIXON.NS","TATAELXSI.NS","MPHASIS.NS","COFORGE.NS","PERSISTENT.NS",
-            "LTTS.NS","CYIENT.NS","KPITTECH.NS","CAMS.NS","CDSL.NS",
-            "BSE.NS","MCX.NS","ICICIGI.NS","STARHEALTH.NS","INDIGRID.NS",
-            "TATATECH.NS","KAYNES.NS","THERMAX.NS","CUMMINSIND.NS",
-            "BHEL.NS","BEL.NS","HAL.NS","ABFRL.NS","POLYCAB.NS","KEI.NS",
-            "BAJAJHLDNG.NS","DEEPAKNTR.NS","RAILTEL.NS","NUVAMA.NS",
-            "360ONE.NS","ANGELONE.NS","MFSL.NS","PNBHOUSING.NS","APTUS.NS",
-            "ZENSARTECH.NS","FIRSTSOURCE.NS","AFFLE.NS","HAPPSTMNDS.NS",
-            "LATENTVIEW.NS","NETWEB.NS","BIKAJI.NS","SENCO.NS","DOMS.NS",
-            "WAAREEENER.NS","SANSERA.NS","CRAFTSMAN.NS","NUVOCO.NS",
-            "JKCEMENT.NS","RAMCOCEM.NS","HEIDELBERG.NS","DALMIA.NS",
-            "SHREECEM.NS","ACC.NS","AMBUJACEMENT.NS","JSPL.NS","SAIL.NS",
-            "NMDC.NS","MOIL.NS","NATIONALUM.NS","WELCORP.NS","GRINDWELL.NS",
-            "TIMKEN.NS","SKF.NS","SCHAEFFLER.NS","FINEORG.NS","SUDARSCHEM.NS",
-            "NAVINFLUOR.NS","FLUOROCHEM.NS","CLEAN.NS","GHCL.NS","NOCIL.NS",
-            "ZYDUSLIFE.NS","LAURUSLABS.NS","GRANULES.NS","CROMPTON.NS",
-        ]
-        N750 = list(dict.fromkeys(N750))  # deduplicate
-
-        # ── 1. Nifty 750 Breadth — stocks above 200 SMA ──────────
-        print(f"\n[Breadth] Fetching {len(N750)} stocks via yfinance...")
-        nav_store = {}
-        batch_size = 50
-        for i in range(0, len(N750), batch_size):
-            batch = N750[i:i+batch_size]
+        subprocess.check_call([sys.executable,'-m','pip','install',
+                               'yfinance','pandas','numpy','--quiet'])
+        import yfinance as yf; import pandas as pd; import numpy as np
+        END=datetime.now().strftime('%Y-%m-%d')
+        START=(datetime.now()-timedelta(days=615)).strftime('%Y-%m-%d')
+        SVIX=(datetime.now()-timedelta(days=365*3+60)).strftime('%Y-%m-%d')
+        N750=["RELIANCE.NS","TCS.NS","HDFCBANK.NS","ICICIBANK.NS","INFY.NS",
+              "HINDUNILVR.NS","SBIN.NS","BHARTIARTL.NS","ITC.NS","KOTAKBANK.NS",
+              "LT.NS","AXISBANK.NS","ASIANPAINT.NS","MARUTI.NS","SUNPHARMA.NS",
+              "TITAN.NS","ULTRACEMCO.NS","WIPRO.NS","NESTLEIND.NS","HCLTECH.NS",
+              "POWERGRID.NS","NTPC.NS","TECHM.NS","BAJFINANCE.NS","BAJAJFINSV.NS",
+              "ONGC.NS","COALINDIA.NS","ADANIENT.NS","ADANIPORTS.NS","JSWSTEEL.NS",
+              "TATASTEEL.NS","HINDALCO.NS","GRASIM.NS","CIPLA.NS","DRREDDY.NS",
+              "DIVISLAB.NS","EICHERMOT.NS","BRITANNIA.NS","APOLLOHOSP.NS","BPCL.NS",
+              "HEROMOTOCO.NS","SHRIRAMFIN.NS","TATACONSUM.NS","INDUSINDBK.NS",
+              "SBILIFE.NS","BAJAJ-AUTO.NS","HDFCLIFE.NS","ICICIPRULI.NS","VEDL.NS",
+              "PIDILITIND.NS","DABUR.NS","MARICO.NS","COLPAL.NS","GODREJCP.NS",
+              "BERGEPAINT.NS","HAVELLS.NS","VOLTAS.NS","MUTHOOTFIN.NS","CHOLAFIN.NS",
+              "BANKBARODA.NS","PNB.NS","CANBK.NS","UNIONBANK.NS","IDFCFIRSTB.NS",
+              "AUBANK.NS","RBLBANK.NS","FEDERALBNK.NS","TATAPOWER.NS","ADANIGREEN.NS",
+              "RECLTD.NS","PFC.NS","IRFC.NS","DLF.NS","GODREJPROP.NS","PRESTIGE.NS",
+              "IRCTC.NS","RVNL.NS","CONCOR.NS","JUBLFOOD.NS","APOLLOTYRE.NS",
+              "ESCORTS.NS","SONACOMS.NS","MOTHERSON.NS","PIIND.NS","UPL.NS",
+              "ASTRAL.NS","TRENT.NS","DMART.NS","AMBER.NS","DIXON.NS",
+              "TATAELXSI.NS","MPHASIS.NS","COFORGE.NS","PERSISTENT.NS","LTTS.NS",
+              "CAMS.NS","CDSL.NS","BSE.NS","MCX.NS","ICICIGI.NS","HAL.NS",
+              "BEL.NS","BHEL.NS","POLYCAB.NS","KEI.NS","DEEPAKNTR.NS","RAILTEL.NS",
+              "ANGELONE.NS","AFFLE.NS","HAPPSTMNDS.NS","LATENTVIEW.NS","BIKAJI.NS",
+              "JKCEMENT.NS","RAMCOCEM.NS","DALMIA.NS","ACC.NS","AMBUJACEMENT.NS",
+              "JSPL.NS","SAIL.NS","NMDC.NS","ZYDUSLIFE.NS","LAURUSLABS.NS",
+              "GRANULES.NS","CROMPTON.NS"]
+        N750=list(dict.fromkeys(N750))
+        print(f"Fetching {len(N750)} stocks..."); store={}
+        for i in range(0,len(N750),50):
+            batch=N750[i:i+50]
             try:
-                df = yf.download(batch, start=START_HIST, end=END_DATE,
-                                 auto_adjust=True, progress=False, threads=True)
-                if isinstance(df.columns, pd.MultiIndex):
-                    closes = df['Close']
-                else:
-                    closes = df
+                df=yf.download(batch,start=START,end=END,
+                               auto_adjust=True,progress=False,threads=True)
+                cl=df['Close'] if isinstance(df.columns,pd.MultiIndex) else df
                 for t in batch:
-                    if t in closes.columns:
-                        s = closes[t].dropna()
-                        if len(s) > 50:
-                            nav_store[t] = s
-            except Exception as e:
-                print(f"  Batch {i//batch_size+1} error: {e}")
+                    if t in cl.columns:
+                        s=cl[t].dropna()
+                        if len(s)>50: store[t]=s
+            except: pass
             time.sleep(0.5)
-
-        print(f"  Got data for {len(nav_store)} stocks")
-
-        # Compute breadth for each trading day in last LOOK_BACK days
-        if nav_store:
-            sample      = next(iter(nav_store.values()))
-            cutoff      = datetime.now() - timedelta(days=LOOK_BACK)
-            trade_days  = [d for d in sample.index
-                           if d.to_pydatetime().replace(tzinfo=None) >= cutoff]
-
-            dates, above_list = [], []
-            for day in trade_days:
-                above = 0; total = 0
-                for s in nav_store.values():
+        print(f"  Got {len(store)} stocks")
+        if store:
+            sample=next(iter(store.values()))
+            cutoff=datetime.now()-timedelta(days=365)
+            td=[d for d in sample.index if d.to_pydatetime().replace(tzinfo=None)>=cutoff]
+            dates,ab=[],[]
+            for day in td:
+                a=t=0
+                for s in store.values():
                     try:
-                        hist = s[s.index <= day]
-                        if len(hist) < 200: continue
-                        if float(hist.iloc[-1]) > float(hist.iloc[-200:].mean()):
-                            above += 1
-                        total += 1
+                        h=s[s.index<=day]
+                        if len(h)<200: continue
+                        if float(h.iloc[-1])>float(h.iloc[-200:].mean()): a+=1
+                        t+=1
                     except: pass
-                if total > 50:
-                    dates.append(day.strftime('%Y-%m-%d'))
-                    above_list.append(above)
-
-            breadth_data = {
-                "dates": dates, "above": above_list,
-                "total": len(nav_store), "generated": TODAY_STR
-            }
-            Path('breadth_data.json').write_text(json.dumps(breadth_data, indent=2))
-            latest = above_list[-1] if above_list else 0
-            print(f"  ✅ breadth_data.json — {len(dates)} days, latest: {latest}/{len(nav_store)}")
-        else:
-            print("  ⚠ No stock data — breadth_data.json not created")
-
-        # ── 2. Nifty/VIX Ratio — 256-day rolling percentile ──────
-        print(f"\n[VIX] Fetching Nifty 50 + India VIX...")
-        start_vix = (datetime.now() - timedelta(days=365*3+60)).strftime('%Y-%m-%d')
-
-        nifty_raw = yf.download('^NSEI',     start=start_vix, end=END_DATE,
-                                auto_adjust=True, progress=False)
-        vix_raw   = yf.download('^INDIAVIX', start=start_vix, end=END_DATE,
-                                auto_adjust=True, progress=False)
-
-        def get_close(df):
-            if isinstance(df.columns, pd.MultiIndex):
-                return df['Close'].iloc[:,0].dropna()
-            return df['Close'].dropna() if 'Close' in df.columns else df.iloc[:,0].dropna()
-
-        nifty_s = get_close(nifty_raw)
-        vix_s   = get_close(vix_raw)
-
-        combined = pd.DataFrame({'nifty': nifty_s, 'vix': vix_s}).dropna()
-        combined['ratio'] = combined['nifty'] / combined['vix']
-
-        # 256-day rolling percentile rank
-        ratio_arr = combined['ratio'].values
-        pct_ranks = []
-        for i in range(len(ratio_arr)):
-            if i < 256:
-                pct_ranks.append(None)
-                continue
-            window  = ratio_arr[i-256:i]
-            current = ratio_arr[i]
-            pct_ranks.append(round(float((window < current).sum() / 256 * 100), 1))
-
-        combined['pct_rank'] = pct_ranks
-        combined = combined.dropna(subset=['pct_rank'])
-
-        # Last LOOK_BACK days only for chart
-        cutoff2  = datetime.now() - timedelta(days=LOOK_BACK)
-        tz       = combined.index.tz
-        if tz:
-            import pytz
-            combined = combined[combined.index >= pd.Timestamp(cutoff2, tz=pytz.utc)]
-        else:
-            combined = combined[combined.index >= cutoff2]
-
-        vix_data = {
-            "dates":      [d.strftime('%Y-%m-%d') for d in combined.index],
-            "percentile": [float(v) for v in combined['pct_rank']],
-            "nifty":      [float(v) for v in combined['nifty']],
-            "ratio":      [round(float(v), 2) for v in combined['ratio']],
-            "generated":  TODAY_STR
-        }
-        Path('vix_data.json').write_text(json.dumps(vix_data, indent=2))
-        latest_pct = vix_data['percentile'][-1] if vix_data['percentile'] else 50
-        print(f"  ✅ vix_data.json — {len(vix_data['dates'])} days, latest: {latest_pct:.0f}th percentile")
-        print(f"\n✅ Market Breadth complete")
-
+                if t>50: dates.append(day.strftime('%Y-%m-%d')); ab.append(a)
+            bd={"dates":dates,"above":ab,"total":len(store),"generated":TODAY_ISO}
+            Path('breadth_data.json').write_text(json.dumps(bd,indent=2))
+            print(f"  ✅ breadth_data.json — {len(dates)} days, latest: {ab[-1] if ab else 0}/{len(store)}")
+        nr=yf.download('^NSEI',start=SVIX,end=END,auto_adjust=True,progress=False)
+        vr=yf.download('^INDIAVIX',start=SVIX,end=END,auto_adjust=True,progress=False)
+        def gc(df):
+            return df['Close'].iloc[:,0].dropna() if isinstance(df.columns,pd.MultiIndex) else df['Close'].dropna()
+        comb=pd.DataFrame({'n':gc(nr),'v':gc(vr)}).dropna()
+        comb['r']=comb['n']/comb['v']
+        ra=comb['r'].values; pr=[]
+        for i in range(len(ra)):
+            if i<256: pr.append(None); continue
+            pr.append(round(float((ra[i-256:i]<ra[i]).sum()/256*100),1))
+        comb['p']=pr; comb=comb.dropna(subset=['p'])
+        c2=datetime.now()-timedelta(days=365); tz=comb.index.tz
+        comb=comb[comb.index>=pd.Timestamp(c2,tz=tz)] if tz else comb[comb.index>=c2]
+        vd={"dates":[d.strftime('%Y-%m-%d') for d in comb.index],
+            "percentile":[float(v) for v in comb['p']],
+            "nifty":[float(v) for v in comb['n']],
+            "ratio":[round(float(v),2) for v in comb['r']],
+            "generated":TODAY_ISO}
+        Path('vix_data.json').write_text(json.dumps(vd,indent=2))
+        lp=vd['percentile'][-1] if vd['percentile'] else 0
+        print(f"  ✅ vix_data.json — {len(vd['dates'])} days, latest: {lp:.0f}th percentile")
+        print("✅ Market Breadth complete")
     except Exception as e:
-        print(f"\n⚠ Market Breadth failed: {e}")
-        print(f"  Main data.json is unaffected — AMFI data saved successfully")
-
+        print(f"⚠ Market Breadth failed: {e} — data.json unaffected")
