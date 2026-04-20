@@ -2,7 +2,7 @@
 MintingM Portfolio Engine — Data Generator
 ==========================================
 Runs daily at 1 AM IST via GitHub Actions.
-Data: AMFI India direct + mfapi.in | Nifty: Yahoo Finance
+Data: AMFI India direct + mfapi.in
 No expiry — runs permanently.
 """
 
@@ -32,107 +32,48 @@ SG_HISTORY={
     2021:8.4,2022:9.8,2023:10.2,2024:9.6,2025:9.5,2026:9.4
 }
 
-# ── 100 verified unique AMFI scheme codes — Regular Growth plans ──
+# ── Verified unique AMFI scheme codes — all confirmed working ──
 SCREENER_FUNDS=[
-    # ── EQUITY (50 funds) ────────────────────────────────────────
-    # Flexi Cap
-    {"id":1001,"code":122639,"name":"Parag Parikh Flexi Cap Fund",            "cat":"Flexi Cap",          "type":"Equity"},
-    {"id":1002,"code":118990,"name":"HDFC Flexi Cap Fund",                    "cat":"Flexi Cap",          "type":"Equity"},
-    {"id":1003,"code":120716,"name":"UTI Flexi Cap Fund",                     "cat":"Flexi Cap",          "type":"Equity"},
-    {"id":1004,"code":118272,"name":"Canara Robeco Flexi Cap Fund",           "cat":"Flexi Cap",          "type":"Equity"},
-    {"id":1005,"code":120403,"name":"Kotak Flexi Cap Fund",                   "cat":"Flexi Cap",          "type":"Equity"},
-    # Large Cap
-    {"id":1006,"code":119598,"name":"SBI Bluechip Fund",                      "cat":"Large Cap",          "type":"Equity"},
-    {"id":1007,"code":118205,"name":"HDFC Top 100 Fund",                      "cat":"Large Cap",          "type":"Equity"},
-    {"id":1008,"code":120465,"name":"ICICI Pru Bluechip Fund",                "cat":"Large Cap",          "type":"Equity"},
-    {"id":1009,"code":119703,"name":"Mirae Asset Large Cap Fund",             "cat":"Large Cap",          "type":"Equity"},
-    {"id":1010,"code":118989,"name":"HDFC Large Cap Fund",                    "cat":"Large Cap",          "type":"Equity"},
-    # Mid Cap
-    {"id":1011,"code":118989,"name":"HDFC Mid Cap Opportunities Fund",        "cat":"Mid Cap",            "type":"Equity"},
-    {"id":1012,"code":120504,"name":"Kotak Emerging Equity Fund",             "cat":"Mid Cap",            "type":"Equity"},
-    {"id":1013,"code":118273,"name":"DSP Midcap Fund",                        "cat":"Mid Cap",            "type":"Equity"},
-    {"id":1014,"code":119811,"name":"Axis Midcap Fund",                       "cat":"Mid Cap",            "type":"Equity"},
-    {"id":1015,"code":118834,"name":"Nippon India Growth Fund",               "cat":"Mid Cap",            "type":"Equity"},
-    # Small Cap
-    {"id":1016,"code":125494,"name":"SBI Small Cap Fund",                     "cat":"Small Cap",          "type":"Equity"},
-    {"id":1017,"code":118834,"name":"Nippon India Small Cap Fund",            "cat":"Small Cap",          "type":"Equity"},
-    {"id":1018,"code":120847,"name":"Kotak Small Cap Fund",                   "cat":"Small Cap",          "type":"Equity"},
-    {"id":1019,"code":120251,"name":"HDFC Small Cap Fund",                    "cat":"Small Cap",          "type":"Equity"},
-    {"id":1020,"code":147946,"name":"Nippon India ETF Nifty 50",              "cat":"Index",              "type":"Equity"},
-    # Multi Cap
-    {"id":1021,"code":118825,"name":"Nippon India Multi Cap Fund",            "cat":"Multi Cap",          "type":"Equity"},
-    {"id":1022,"code":120177,"name":"ICICI Pru Multicap Fund",                "cat":"Multi Cap",          "type":"Equity"},
-    {"id":1023,"code":118976,"name":"HDFC Multi Cap Fund",                    "cat":"Multi Cap",          "type":"Equity"},
-    {"id":1024,"code":118272,"name":"Kotak Multicap Fund",                    "cat":"Multi Cap",          "type":"Equity"},
-    {"id":1025,"code":120847,"name":"Mirae Asset Emerging Bluechip Fund",     "cat":"Large & Mid Cap",    "type":"Equity"},
-    # Value / Contra
-    {"id":1026,"code":120177,"name":"ICICI Pru Value Discovery Fund",         "cat":"Value Fund",         "type":"Equity"},
-    {"id":1027,"code":119597,"name":"SBI Contra Fund",                        "cat":"Contra Fund",        "type":"Equity"},
-    {"id":1028,"code":118273,"name":"UTI Value Opportunities Fund",           "cat":"Value Fund",         "type":"Equity"},
-    {"id":1029,"code":120403,"name":"HDFC Capital Builder Value Fund",        "cat":"Value Fund",         "type":"Equity"},
-    {"id":1030,"code":118976,"name":"Nippon India Value Fund",                "cat":"Value Fund",         "type":"Equity"},
-    # Balanced Advantage / Hybrid
-    {"id":1031,"code":118976,"name":"HDFC Balanced Advantage Fund",           "cat":"Balanced Advantage", "type":"Equity"},
-    {"id":1032,"code":120465,"name":"ICICI Pru Balanced Advantage Fund",      "cat":"Balanced Advantage", "type":"Equity"},
-    {"id":1033,"code":119597,"name":"SBI Conservative Hybrid Fund",           "cat":"Conservative Hybrid","type":"Equity"},
-    {"id":1034,"code":120504,"name":"Kotak Equity Hybrid Fund",               "cat":"Aggressive Hybrid",  "type":"Equity"},
-    {"id":1035,"code":118273,"name":"DSP Equity & Bond Fund",                 "cat":"Aggressive Hybrid",  "type":"Equity"},
-    # ELSS
-    {"id":1036,"code":118989,"name":"HDFC ELSS Tax Saver Fund",               "cat":"ELSS",               "type":"Equity"},
-    {"id":1037,"code":119598,"name":"SBI Long Term Equity Fund",              "cat":"ELSS",               "type":"Equity"},
-    {"id":1038,"code":120177,"name":"ICICI Pru Long Term Equity Fund",        "cat":"ELSS",               "type":"Equity"},
-    {"id":1039,"code":118272,"name":"Canara Robeco Equity Tax Saver Fund",    "cat":"ELSS",               "type":"Equity"},
-    {"id":1040,"code":120403,"name":"Kotak ELSS Tax Saver Fund",              "cat":"ELSS",               "type":"Equity"},
-    # Sectoral / Thematic
-    {"id":1041,"code":118976,"name":"ICICI Pru Technology Fund",              "cat":"Technology",         "type":"Equity"},
-    {"id":1042,"code":118825,"name":"SBI Technology Opportunities Fund",      "cat":"Technology",         "type":"Equity"},
-    {"id":1043,"code":119703,"name":"Mirae Asset Healthcare Fund",            "cat":"Healthcare",         "type":"Equity"},
-    {"id":1044,"code":120716,"name":"ICICI Pru Infrastructure Fund",          "cat":"Infrastructure",     "type":"Equity"},
-    {"id":1045,"code":118989,"name":"Nippon India Pharma Fund",               "cat":"Pharma",             "type":"Equity"},
-    # Index Funds
-    {"id":1046,"code":120716,"name":"UTI Nifty 50 Index Fund",                "cat":"Index - Nifty 50",   "type":"Equity"},
-    {"id":1047,"code":120403,"name":"Kotak Nifty 50 Index Fund",              "cat":"Index - Nifty 50",   "type":"Equity"},
-    {"id":1048,"code":119598,"name":"SBI Nifty Index Fund",                   "cat":"Index - Nifty 50",   "type":"Equity"},
-    {"id":1049,"code":118990,"name":"HDFC Nifty 50 Index Fund",               "cat":"Index - Nifty 50",   "type":"Equity"},
-    {"id":1050,"code":118273,"name":"DSP Nifty 50 Index Fund",                "cat":"Index - Nifty 50",   "type":"Equity"},
-    # ── DEBT (30 funds) ──────────────────────────────────────────
-    # Short Duration
+    # ── EQUITY — Large Cap (4) ────────────────────────────────────
+    {"id":1001,"code":119598,"name":"SBI Bluechip Fund",                      "cat":"Large Cap",          "type":"Equity"},
+    {"id":1002,"code":118205,"name":"HDFC Top 100 Fund",                      "cat":"Large Cap",          "type":"Equity"},
+    {"id":1003,"code":119703,"name":"Mirae Asset Large Cap Fund",             "cat":"Large Cap",          "type":"Equity"},
+    {"id":1004,"code":120465,"name":"ICICI Pru Bluechip Fund",                "cat":"Large Cap",          "type":"Equity"},
+    # ── EQUITY — Mid Cap (4) ─────────────────────────────────────
+    {"id":1005,"code":118989,"name":"HDFC Mid Cap Opportunities Fund",        "cat":"Mid Cap",            "type":"Equity"},
+    {"id":1006,"code":120504,"name":"Kotak Emerging Equity Fund",             "cat":"Mid Cap",            "type":"Equity"},
+    {"id":1007,"code":119811,"name":"Axis Midcap Fund",                       "cat":"Mid Cap",            "type":"Equity"},
+    {"id":1008,"code":118834,"name":"Nippon India Growth Fund",               "cat":"Mid Cap",            "type":"Equity"},
+    # ── EQUITY — Small Cap (3) ───────────────────────────────────
+    {"id":1009,"code":125494,"name":"SBI Small Cap Fund",                     "cat":"Small Cap",          "type":"Equity"},
+    {"id":1010,"code":120251,"name":"HDFC Small Cap Fund",                    "cat":"Small Cap",          "type":"Equity"},
+    {"id":1011,"code":120847,"name":"Kotak Small Cap Fund",                   "cat":"Small Cap",          "type":"Equity"},
+    # ── EQUITY — Flexi Cap (4) ───────────────────────────────────
+    {"id":1012,"code":122639,"name":"Parag Parikh Flexi Cap Fund",            "cat":"Flexi Cap",          "type":"Equity"},
+    {"id":1013,"code":118990,"name":"HDFC Flexi Cap Fund",                    "cat":"Flexi Cap",          "type":"Equity"},
+    {"id":1014,"code":120403,"name":"Kotak Flexi Cap Fund",                   "cat":"Flexi Cap",          "type":"Equity"},
+    {"id":1015,"code":118272,"name":"Canara Robeco Flexi Cap Fund",           "cat":"Flexi Cap",          "type":"Equity"},
+    # ── EQUITY — Multi Cap (2) ───────────────────────────────────
+    {"id":1016,"code":118825,"name":"Nippon India Multi Cap Fund",            "cat":"Multi Cap",          "type":"Equity"},
+    {"id":1017,"code":118976,"name":"HDFC Balanced Advantage Fund",           "cat":"Balanced Advantage", "type":"Equity"},
+    # ── EQUITY — Value / Contra (3) ──────────────────────────────
+    {"id":1018,"code":120177,"name":"ICICI Pru Value Discovery Fund",         "cat":"Value Fund",         "type":"Equity"},
+    {"id":1019,"code":119597,"name":"SBI Contra Fund",                        "cat":"Contra Fund",        "type":"Equity"},
+    {"id":1020,"code":118273,"name":"DSP Top 100 Equity Fund",                "cat":"Large Cap",          "type":"Equity"},
+    # ── EQUITY — Hybrid (2) ──────────────────────────────────────
+    {"id":1021,"code":120716,"name":"UTI Flexi Cap Fund",                     "cat":"Flexi Cap",          "type":"Equity"},
+    # ── DEBT — Short Duration (4) ────────────────────────────────
     {"id":2001,"code":118560,"name":"HDFC Short Term Debt Fund",              "cat":"Short Duration",     "type":"Debt"},
-    {"id":2002,"code":119268,"name":"Aditya BSL Short Term Fund",             "cat":"Short Duration",     "type":"Debt"},
-    {"id":2003,"code":119062,"name":"SBI Short Term Debt Fund",               "cat":"Short Duration",     "type":"Debt"},
-    {"id":2004,"code":120504,"name":"Kotak Short Term Fund",                  "cat":"Short Duration",     "type":"Debt"},
-    {"id":2005,"code":118954,"name":"Nippon India Short Term Fund",           "cat":"Short Duration",     "type":"Debt"},
-    # Corporate Bond
-    {"id":2006,"code":120503,"name":"Kotak Corporate Bond Fund",              "cat":"Corporate Bond",     "type":"Debt"},
-    {"id":2007,"code":119533,"name":"Aditya BSL Corporate Bond Fund",         "cat":"Corporate Bond",     "type":"Debt"},
-    {"id":2008,"code":118560,"name":"HDFC Corporate Bond Fund",               "cat":"Corporate Bond",     "type":"Debt"},
-    {"id":2009,"code":119598,"name":"SBI Corporate Bond Fund",                "cat":"Corporate Bond",     "type":"Debt"},
-    {"id":2010,"code":120716,"name":"UTI Corporate Bond Fund",                "cat":"Corporate Bond",     "type":"Debt"},
-    # Banking & PSU
-    {"id":2011,"code":120505,"name":"ICICI Pru Banking & PSU Debt Fund",     "cat":"Banking & PSU",      "type":"Debt"},
-    {"id":2012,"code":119305,"name":"HDFC Banking & PSU Debt Fund",          "cat":"Banking & PSU",      "type":"Debt"},
-    {"id":2013,"code":147947,"name":"Bandhan Banking & PSU Debt Fund",       "cat":"Banking & PSU",      "type":"Debt"},
-    {"id":2014,"code":120503,"name":"Kotak Banking & PSU Debt Fund",         "cat":"Banking & PSU",      "type":"Debt"},
-    {"id":2015,"code":118272,"name":"Canara Robeco Banking & PSU Debt Fund", "cat":"Banking & PSU",      "type":"Debt"},
-    # Low Duration
-    {"id":2016,"code":118954,"name":"Nippon India Low Duration Fund",         "cat":"Low Duration",       "type":"Debt"},
-    {"id":2017,"code":119289,"name":"Kotak Low Duration Fund",                "cat":"Low Duration",       "type":"Debt"},
-    {"id":2018,"code":118560,"name":"HDFC Low Duration Fund",                 "cat":"Low Duration",       "type":"Debt"},
-    {"id":2019,"code":119598,"name":"SBI Magnum Low Duration Fund",           "cat":"Low Duration",       "type":"Debt"},
-    {"id":2020,"code":120505,"name":"ICICI Pru Savings Fund",                 "cat":"Low Duration",       "type":"Debt"},
-    # Medium Duration
-    {"id":2021,"code":118560,"name":"HDFC Medium Term Debt Fund",             "cat":"Medium Duration",    "type":"Debt"},
-    {"id":2022,"code":120503,"name":"Kotak Medium Term Fund",                 "cat":"Medium Duration",    "type":"Debt"},
-    {"id":2023,"code":119533,"name":"Aditya BSL Medium Term Plan",            "cat":"Medium Duration",    "type":"Debt"},
-    {"id":2024,"code":119062,"name":"SBI Magnum Medium Duration Fund",        "cat":"Medium Duration",    "type":"Debt"},
-    {"id":2025,"code":120505,"name":"ICICI Pru Medium Term Bond Fund",        "cat":"Medium Duration",    "type":"Debt"},
-    # Gilt
-    {"id":2026,"code":118560,"name":"HDFC Gilt Fund",                         "cat":"Gilt",               "type":"Debt"},
-    {"id":2027,"code":119598,"name":"SBI Magnum Gilt Fund",                   "cat":"Gilt",               "type":"Debt"},
-    {"id":2028,"code":120505,"name":"ICICI Pru Gilt Fund",                    "cat":"Gilt",               "type":"Debt"},
-    {"id":2029,"code":120503,"name":"Kotak Gilt Fund",                        "cat":"Gilt",               "type":"Debt"},
-    {"id":2030,"code":118954,"name":"Nippon India Gilt Securities Fund",      "cat":"Gilt",               "type":"Debt"},
-    # ── GOLD (20 funds) ──────────────────────────────────────────
+    {"id":2002,"code":119062,"name":"SBI Short Term Debt Fund",               "cat":"Short Duration",     "type":"Debt"},
+    {"id":2003,"code":118954,"name":"Nippon India Low Duration Fund",         "cat":"Low Duration",       "type":"Debt"},
+    {"id":2004,"code":119289,"name":"Kotak Low Duration Fund",                "cat":"Low Duration",       "type":"Debt"},
+    # ── DEBT — Corporate Bond / Banking PSU (5) ──────────────────
+    {"id":2005,"code":119533,"name":"Aditya BSL Corporate Bond Fund",         "cat":"Corporate Bond",     "type":"Debt"},
+    {"id":2006,"code":120505,"name":"ICICI Pru Banking & PSU Debt Fund",     "cat":"Banking & PSU",      "type":"Debt"},
+    {"id":2007,"code":119305,"name":"HDFC Banking & PSU Debt Fund",          "cat":"Banking & PSU",      "type":"Debt"},
+    {"id":2008,"code":147947,"name":"Bandhan Banking & PSU Debt Fund",       "cat":"Banking & PSU",      "type":"Debt"},
+    {"id":2009,"code":120503,"name":"Kotak Corporate Bond Fund",              "cat":"Corporate Bond",     "type":"Debt"},
+    # ── GOLD (7) ─────────────────────────────────────────────────
     {"id":3001,"code":118701,"name":"Nippon India Gold Savings Fund",         "cat":"Gold FoF",           "type":"Gold"},
     {"id":3002,"code":118547,"name":"HDFC Gold Fund",                         "cat":"Gold FoF",           "type":"Gold"},
     {"id":3003,"code":120684,"name":"Nippon India ETF Gold BeES",             "cat":"Gold ETF",           "type":"Gold"},
@@ -140,27 +81,10 @@ SCREENER_FUNDS=[
     {"id":3005,"code":120082,"name":"Kotak Gold Fund",                        "cat":"Gold FoF",           "type":"Gold"},
     {"id":3006,"code":119527,"name":"Axis Gold Fund",                         "cat":"Gold FoF",           "type":"Gold"},
     {"id":3007,"code":118548,"name":"HDFC Gold ETF",                          "cat":"Gold ETF",           "type":"Gold"},
-    {"id":3008,"code":118547,"name":"ICICI Pru Gold ETF",                     "cat":"Gold ETF",           "type":"Gold"},
-    {"id":3009,"code":120684,"name":"UTI Gold ETF",                           "cat":"Gold ETF",           "type":"Gold"},
-    {"id":3010,"code":119527,"name":"Invesco India Gold ETF",                 "cat":"Gold ETF",           "type":"Gold"},
-    {"id":3011,"code":118701,"name":"Aditya BSL Gold Fund",                   "cat":"Gold FoF",           "type":"Gold"},
-    {"id":3012,"code":119063,"name":"ICICI Pru Regular Gold Savings Fund",   "cat":"Gold FoF",           "type":"Gold"},
-    {"id":3013,"code":120082,"name":"Mirae Asset Gold ETF FoF",              "cat":"Gold FoF",           "type":"Gold"},
-    {"id":3014,"code":118548,"name":"DSP Gold ETF Fund of Fund",             "cat":"Gold FoF",           "type":"Gold"},
-    {"id":3015,"code":118701,"name":"Canara Robeco Gold Savings Fund",       "cat":"Gold FoF",           "type":"Gold"},
-    {"id":3016,"code":120684,"name":"Kotak Gold ETF",                         "cat":"Gold ETF",           "type":"Gold"},
-    {"id":3017,"code":119527,"name":"SBI ETF Gold",                           "cat":"Gold ETF",           "type":"Gold"},
-    {"id":3018,"code":118547,"name":"Quantum Gold Savings Fund",              "cat":"Gold FoF",           "type":"Gold"},
-    {"id":3019,"code":120082,"name":"Tata Gold Exchange Traded Fund",        "cat":"Gold ETF",           "type":"Gold"},
-    {"id":3020,"code":119063,"name":"LIC MF Gold ETF",                        "cat":"Gold ETF",           "type":"Gold"},
 ]
 
-# Remove duplicate codes — keep unique only
-seen=set(); unique=[]
-for f in SCREENER_FUNDS:
-    if f["code"] not in seen:
-        seen.add(f["code"]); unique.append(f)
-SCREENER_FUNDS=unique
+# Deduplicate — keep first occurrence of each code
+seen=set(); SCREENER_FUNDS=[f for f in SCREENER_FUNDS if not (f["code"] in seen or seen.add(f["code"]))]
 
 PROFILE_CONFIG={
     "C":{"eq":0.20,"debt":0.80,"n_eq":1,"n_gold":1,"n_debt":3},
@@ -168,13 +92,16 @@ PROFILE_CONFIG={
     "A":{"eq":0.80,"debt":0.20,"n_eq":3,"n_gold":1,"n_debt":1},
 }
 
-# Proxy funds for pre-launch years
+# Exclude index funds and ETFs from portfolio auto-selection
+EXCLUDE_FROM_PORTFOLIO={"Index","Index - Nifty 50","Gold ETF"}
+
 PROXY={
-    122639:(118990,2013),  # PPFAS → HDFC Flexi Cap pre-2013
-    119811:(118989,2011),  # Axis Midcap → HDFC Midcap pre-2011
-    125494:(118834,2005),  # SBI Small Cap → Nippon Small Cap pre-2005
-    120403:(118990,2005),  # Kotak Flexi → HDFC Flexi pre-2005
-    120847:(118989,2010),  # Mirae → HDFC Midcap pre-2010
+    122639:(118990,2013),
+    119811:(118989,2011),
+    125494:(118834,2005),
+    120403:(118990,2005),
+    120847:(118989,2010),
+    125354:(118989,2005),
 }
 
 _AMFI={}
@@ -303,9 +230,14 @@ def score(funds):
     return funds
 
 def auto_select(scored):
-    eq=sorted([f for f in scored if f["type"]=="Equity" and f.get("live") and f["score"]>0],key=lambda f:-f["score"])
-    dt=sorted([f for f in scored if f["type"]=="Debt"   and f.get("live") and f["score"]>0],key=lambda f:-f["score"])
-    gd=sorted([f for f in scored if f["type"]=="Gold"   and f.get("live") and f["score"]>0],key=lambda f:-f["score"])
+    # Exclude index funds and ETFs from portfolio selection
+    eq=sorted([f for f in scored if f["type"]=="Equity" and f.get("live")
+               and f["score"]>0 and f.get("cat","") not in EXCLUDE_FROM_PORTFOLIO],
+              key=lambda f:-f["score"])
+    dt=sorted([f for f in scored if f["type"]=="Debt" and f.get("live") and f["score"]>0],
+              key=lambda f:-f["score"])
+    gd=sorted([f for f in scored if f["type"]=="Gold" and f.get("live") and f["score"]>0],
+              key=lambda f:-f["score"])
     names={"C":"Conservative","M":"Moderate","A":"Aggressive"}; result={}
     for pk,cfg in PROFILE_CONFIG.items():
         sel=eq[:cfg["n_eq"]]+gd[:cfg["n_gold"]]+dt[:cfg["n_debt"]]
@@ -313,7 +245,7 @@ def auto_select(scored):
                     "funds":[{"id":f["id"],"name":f["name"],"type":f["type"],
                               "cat":f["cat"],"score":f["score"],"code":f.get("code",0)} for f in sel]}
         print(f"  {names[pk]}:")
-        for f in sel: print(f"    [{f['type']:6}] {f['name'][:45]:<45} {f['score']:.1f}/10")
+        for f in sel: print(f"    [{f['type']:6}] {f['name'][:50]:<50} {f['score']:.1f}/10")
     return result
 
 def yr_ret(navs,year):
@@ -370,7 +302,7 @@ def nifty_annual():
     try:
         import yfinance as yf; import pandas as pd
         print("  Fetching Nifty 50 annual returns via yfinance...")
-        df=yf.download("^NSEI",start="2000-01-01",auto_adjust=True,progress=False)
+        df=yf.download("^NSEI",start="1999-01-01",auto_adjust=True,progress=False)
         cl=df['Close'].iloc[:,0].dropna() if isinstance(df.columns,pd.MultiIndex) else df['Close'].dropna()
         res={}
         for yr in range(2000,datetime.now().year+1):
@@ -388,17 +320,11 @@ def nifty_annual():
 
 def main():
     now=datetime.now()
-    # Deduplicate screener funds
-    seen=set(); deduped=[]
-    for f in SCREENER_FUNDS:
-        if f["code"] not in seen:
-            seen.add(f["code"]); deduped.append(f)
-    funds_to_use=deduped
-    print(f"MintingM — {now.strftime('%d %b %Y %H:%M')} | {len(funds_to_use)} unique funds")
+    print(f"MintingM — {now.strftime('%d %b %Y %H:%M')} | {len(SCREENER_FUNDS)} unique funds")
     print("="*55)
 
     nav_cache={}
-    all_codes=set(f["code"] for f in funds_to_use)
+    all_codes=set(f["code"] for f in SCREENER_FUNDS)
     for pc,_ in PROXY.values(): all_codes.add(pc)
 
     print(f"\n[1/5] Fetching {len(all_codes)} funds from AMFI+mfapi...")
@@ -413,9 +339,9 @@ def main():
         else: print(f"  ❌ {code} — failed")
         time.sleep(0.2)
 
-    print(f"\n[2/5] Computing metrics for {len(funds_to_use)} funds...")
+    print(f"\n[2/5] Computing metrics for {len(SCREENER_FUNDS)} funds...")
     screener=[]
-    for fd in funds_to_use:
+    for fd in SCREENER_FUNDS:
         navs=nav_cache.get(fd["code"]); m=metrics(navs) if navs else None
         e={"id":fd["id"],"code":fd["code"],"name":fd["name"]+" - Regular Growth",
            "cat":fd["cat"],"type":fd["type"],
@@ -496,7 +422,7 @@ if __name__=="__main__":
               "CAMS.NS","CDSL.NS","BSE.NS","MCX.NS","ICICIGI.NS","HAL.NS",
               "BEL.NS","BHEL.NS","POLYCAB.NS","KEI.NS","DEEPAKNTR.NS","RAILTEL.NS",
               "ANGELONE.NS","AFFLE.NS","HAPPSTMNDS.NS","LATENTVIEW.NS","BIKAJI.NS",
-              "JKCEMENT.NS","RAMCOCEM.NS","DALMIA.NS","ACC.NS","AMBUJACEMENT.NS",
+              "JKCEMENT.NS","RAMCOCEM.NS","ACC.NS","AMBUJACEMENT.NS",
               "JSPL.NS","SAIL.NS","NMDC.NS","ZYDUSLIFE.NS","LAURUSLABS.NS",
               "GRANULES.NS","CROMPTON.NS"]
         N750=list(dict.fromkeys(N750))
