@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-09-21T22:42:55.850312",
-  "generated_date": "21 Sep 2026",
-  "generated_time": "22:42 IST",
+  "generated_at": "2026-09-22T22:21:50.674830",
+  "generated_date": "22 Sep 2026",
+  "generated_time": "22:21 IST",
   "data_source": "AMFI India direct + mfapi.in \u2014 official NAV data",
   "live_funds": 37,
   "total_funds": 37,
@@ -57,7 +57,7 @@
     "2023": 19.4,
     "2024": 8.8,
     "2025": 10.1,
-    "2026": -10.7
+    "2026": -10.4
   },
   "portfolio_selection": {
     "C": {
